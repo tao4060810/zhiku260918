@@ -9,6 +9,7 @@ from processor.query_processor.base import NodeBase
 from processor.query_processor.state import QueryGraphState
 from tool.logger import logger
 from utils.json_format_utils import format_json
+from utils.task_utils import add_task_warning
 
 class NodeWebSearchMcp(NodeBase):
     """
@@ -41,7 +42,9 @@ class NodeWebSearchMcp(NodeBase):
 
         if docs:
             return {"web_search_docs": docs}
-        return {}
+        if query:
+            add_task_warning(state.get("task_id"), "网络搜索未返回结果，本次使用知识库资料。")
+        return {"web_search_docs": []}
 
     @staticmethod
     def _parse_results(result) -> list:

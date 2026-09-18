@@ -250,7 +250,9 @@ class NodeMDImg(BaseNode):
                 model=lm_config.vl_model,
                 api_key=lm_config.api_key,
                 base_url=lm_config.base_url,
-                temperature=lm_config.llm_temperature
+                temperature=lm_config.llm_temperature,
+                timeout=90,
+                max_retries=1,
             )
             messages = [
                 {

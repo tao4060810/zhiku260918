@@ -104,9 +104,10 @@ class KBQueryWorkflow:
         self.workflow.add_edge("node_multi_search", "node_web_search_mcp")
 
         # 4. 多路搜索结果合并
-        self.workflow.add_edge("node_search_embedding", "node_join")
-        self.workflow.add_edge("node_search_embedding_hyde", "node_join")
-        self.workflow.add_edge("node_web_search_mcp", "node_join")
+        self.workflow.add_edge(
+            ["node_search_embedding", "node_search_embedding_hyde", "node_web_search_mcp"],
+            "node_join",
+        )
 
         # 5. 合并 -> 排序 -> 重排 -> 生成 -> 结束
         self.workflow.add_edge("node_join", "node_rrf")

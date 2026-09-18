@@ -1,4 +1,5 @@
 # processor/query_processor/nodes/node_search_embedding_hyde.py
+import json
 from config.milvus_config import milvus_config
 from processor.query_processor.base import NodeBase
 from processor.query_processor.prompt.search_embedding_hyde import HYDE_PROMPT
@@ -7,6 +8,7 @@ from tool.logger import logger
 from utils.embedding_utils import generate_embeddings
 from utils.json_format_utils import format_json
 from utils.llm_utils import get_llm_client
+from utils.task_utils import add_task_warning
 from utils.milvus_utils import create_hybrid_search_requests, get_milvus_client, hybrid_search
 
 
@@ -60,7 +62,8 @@ class NodeSearchEmbeddingHyde(NodeBase):
 
         except Exception as e:
             logger.exception(f"假设性文档向量搜索失败: {e}")
-            return {}
+            add_task_warning(state.get("task_id"), "假设文档检索暂不可用，已使用其他检索结果。")
+            return {"hyde_embedding_chunks": []}
 
     def _step_1_create_hyde_doc(self, rewritten_query: str) -> str:
         """
@@ -120,7 +123,7 @@ class NodeSearchEmbeddingHyde(NodeBase):
                 #quoted = ", ".join(f'"{v}"' for v in item_names)
                 #expr = f"item_name in [{quoted}]"
                 # 'item_name in ["BrotherHAK-180烫金机","BrotherHAK180烫金机"]'
-            	expr = f'item_name in {item_names}'
+                expr = f'item_name in {json.dumps(item_names, ensure_ascii=False)}'
                 logger.info(f"步骤2: 过滤条件: {expr}")
             else:
                 logger.info("步骤2: 未指定商品名过滤，将全库检索")
@@ -141,7 +144,7 @@ class NodeSearchEmbeddingHyde(NodeBase):
                 collection_name=collection_name,
                 reqs=reqs,
                 ranker_weights=(0.8, 0.2),
-                output_fields=["chunk_id", "content", "item_name"],
+                output_fields=["chunk_id", "content", "item_name", "title", "file_title"],
             )
 
             return res[0] if res else []

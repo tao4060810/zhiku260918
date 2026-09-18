@@ -31,6 +31,8 @@ def get_llm_client(model: str | None = None, json_mode: bool = False) -> ChatOpe
         base_url=lm_config.base_url,
         extra_body=extra_body,
         model_kwargs=model_kwargs,
+        timeout=90,
+        max_retries=1,
     )
     _llm_client_cache[key] = client
     return client

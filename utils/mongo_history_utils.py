@@ -4,6 +4,7 @@
 import os
 # 导入日志模块：用于记录程序运行日志（成功/失败/错误信息）
 import logging
+from threading import Lock
 # 导入类型注解模块：用于函数参数/返回值的类型提示，提升代码可读性和规范性
 from typing import List, Dict, Any, Optional
 # 导入时间模块：用于生成时间戳，记录对话的创建时间
@@ -38,7 +39,12 @@ class HistoryMongoTool:
             self.db_name = os.getenv("MONGO_DB_NAME")
 
             # 创建MongoDB客户端实例，建立与数据库的连接
-            self.client = MongoClient(self.mongo_url)
+            self.client = MongoClient(
+                self.mongo_url,
+                serverSelectionTimeoutMS=5000,
+                connectTimeoutMS=5000,
+                socketTimeoutMS=10000,
+            )
             # 获取指定名称的数据库对象
             self.db = self.client[self.db_name]
             # 获取对话记录的集合（相当于关系型数据库的表），集合名：chat_message
@@ -59,8 +65,9 @@ class HistoryMongoTool:
 
 
 # 定义全局变量：存储HistoryMongoTool的单例实例
-# 目的：将数据库连接的初始化提前到模块加载阶段，避免第一次调用接口时才建立连接（提升首次响应速度）
-_history_mongo_tool = HistoryMongoTool()
+# 在第一次业务请求时连接，数据库离线不影响静态页面启动。
+_history_mongo_tool = None
+_history_lock = Lock()
 
 def get_history_mongo_tool() -> HistoryMongoTool:
     """
@@ -71,8 +78,9 @@ def get_history_mongo_tool() -> HistoryMongoTool:
     # 声明使用全局变量，避免函数内视为局部变量
     global _history_mongo_tool
     # 懒加载：仅当全局实例为空时，才创建新的实例
-    if _history_mongo_tool is None:
-        _history_mongo_tool = HistoryMongoTool()
+    with _history_lock:
+        if _history_mongo_tool is None:
+            _history_mongo_tool = HistoryMongoTool()
     # 返回单例实例
     return _history_mongo_tool
 
@@ -95,7 +103,7 @@ def clear_history(session_id: str) -> int:
         # 捕获删除异常，记录错误日志，包含会话ID
         logging.error(f"Error clearing history for session {session_id}: {e}")
         # 异常时返回0，标识删除失败
-        return 0
+        raise
 
 def save_chat_message(
         session_id: str,
@@ -104,7 +112,8 @@ def save_chat_message(
         rewritten_query: str = "",
         item_names: List[str] = None,
         image_urls: List[str] = None,
-        message_id: str = None
+        message_id: str = None,
+        sources: List[Dict] = None,
 ) -> str:
     """
     写入/更新单条会话记录到MongoDB
@@ -129,7 +138,8 @@ def save_chat_message(
         "rewritten_query": rewritten_query or "",  # 问题优化后的改写，空值处理为空字符串
         "item_names": item_names,  # 关联商品名称列表
         "image_urls": image_urls,  # 关联图片URL列表
-        "ts": ts  # 时间戳，排序和时间筛选维度
+        "ts": ts,
+        "sources": sources or [],
     }
 
     # 获取全局的HistoryMongoTool实例，使用单例模式
@@ -199,16 +209,30 @@ def get_recent_messages(session_id: str, limit: int = 10) -> List[Dict[str, Any]
         # find(query)：获取符合条件的游标（惰性加载，不立即查询）
         # sort("ts", ASCENDING)：按ts字段升序（从旧到新），适配LLM上下文顺序
         # limit(limit)：限制返回的最大条数
-        cursor = mongo_tool.chat_message.find(query).sort("ts", ASCENDING).limit(limit)
+        cursor = mongo_tool.chat_message.find(query).sort([("ts", -1), ("_id", -1)]).limit(limit)
         # 将游标转为列表，触发实际数据库查询，获取所有符合条件的文档
         messages = list(cursor)
+        messages.reverse()
         # 返回查询结果列表
         return messages
     except Exception as e:
         # 捕获查询异常，记录错误日志
         logging.error(f"Error getting recent messages: {e}")
         # 异常时返回空列表，避免上层处理None报错
-        return []
+        raise
+
+
+def list_sessions(limit=50):
+    collection = get_history_mongo_tool().chat_message
+    return list(collection.aggregate([
+        {"$sort": {"ts": 1, "_id": 1}},
+        {"$group": {
+            "_id": "$session_id", "title": {"$first": "$text"},
+            "updated_at": {"$last": "$ts"}, "message_count": {"$sum": 1},
+        }},
+        {"$sort": {"updated_at": -1}}, {"$limit": limit},
+        {"$project": {"_id": 0, "session_id": "$_id", "title": 1, "updated_at": 1, "message_count": 1}},
+    ], maxTimeMS=5000))
 
 
 # 主程序入口：仅当直接运行该脚本时执行，用于简单的功能测试

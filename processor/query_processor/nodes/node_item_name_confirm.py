@@ -103,6 +103,8 @@ class NodeItemNameConfirm(NodeBase):
                 api_key=lm_config.api_key,
                 base_url=lm_config.base_url,
                 temperature=lm_config.llm_temperature,
+                timeout=90,
+                max_retries=1,
                 # 开启JSON标准输出模式，强制模型返回可解析的json_object
                 model_kwargs={
                     "response_format": {"type": "json_object"}
@@ -381,7 +383,7 @@ class NodeItemNameConfirm(NodeBase):
             return state
 
         # 分支C：无确认商品名，且无候选商品名（无匹配结果，需用户重新提供）
-        state["answer"] = "抱歉，未找到相关产品，请提供准确型号以便我为您查询。"
+        state["answer"] = ("暂时无法确认您要咨询的产品。掌柜智库主要解答已收录产品的使用方法、参数和故障问题，暂不覆盖所有品牌与型号。请补充“品牌 + 型号 + 具体问题”，例如：“Brother HAK180 烫金机如何调节转印温度？”如果该产品尚未收录，可先在「文档管理」中上传相关说明书。")
         state["item_names"] = []
         return state
 

@@ -11,7 +11,7 @@ def get_milvus_client():
     if _milvus_client is not None:
         return _milvus_client
 
-    _milvus_client = MilvusClient(milvus_uri)
+    _milvus_client = MilvusClient(milvus_uri, timeout=8)
     return _milvus_client
 
 def escape_milvus_string(value: str) -> str:
@@ -107,4 +107,4 @@ def hybrid_search(client, collection_name, reqs, ranker_weights=(0.5, 0.5), norm
         return res
     except Exception as e:
         logger.error(f"Milvus混合搜索执行失败，集合[{collection_name}]：{str(e)}", exc_info=True)
-        return None
+        raise

@@ -8,6 +8,7 @@ class QueryGraphState(TypedDict):
     包含整个查询流程中传递的所有数据。
     """
 
+    task_id: str
     session_id: str  # 会话ID
     message_id: str  # 消息ID
 
@@ -25,6 +26,9 @@ class QueryGraphState(TypedDict):
     # 生成过程中的数据
     prompt: str  # 组装好的 Prompt
     answer: str  # 最终生成的答案
+    image_urls: list
+    sources: list
+    hyde_doc: str
 
     # 辅助信息
     item_names: List[str]  # 提取出的商品名称

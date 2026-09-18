@@ -4,7 +4,7 @@ from typing import List, Dict, Any, Tuple
 from processor.query_processor.base import NodeBase
 from processor.query_processor.state import QueryGraphState
 from tool.logger import logger
-from utils.json_format_utils import serialize_json
+from utils.json_format_utils import format_json as serialize_json
 
 
 class NodeRrf(NodeBase):

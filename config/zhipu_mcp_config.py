@@ -17,5 +17,5 @@ class McpConfig:
 # 注意使用aliyun的api_key
 mcp_config = McpConfig(
     mcp_base_url=os.getenv("MCP_ZHIPU_BASE_URL"),
-    api_key=os.getenv("OPENAI_API_KEY")
+    api_key=os.getenv("MCP_ZHIPU_API_KEY") or os.getenv("OPENAI_API_KEY")
 )

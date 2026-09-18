@@ -57,7 +57,7 @@ class NodeRerank(NodeBase):
         final_docs = []
 
         # 1. 获取本地 RRF 的文档
-        for rrf_doc in state.get('rrf_chunks'):
+        for rrf_doc in (state.get('rrf_chunks') or []):
 
             format_rrf_doc = {
                 "content": rrf_doc.get('content'),
@@ -69,7 +69,7 @@ class NodeRerank(NodeBase):
             final_docs.append(format_rrf_doc)
 
         # 2. 获取 web 远程的文档
-        for web_doc in state.get('web_search_docs'):
+        for web_doc in (state.get('web_search_docs') or []):
 
             format_web_doc = {
                 "content": web_doc.get('snippet'),
@@ -117,7 +117,7 @@ class NodeRerank(NodeBase):
 
         except Exception as e:
             logger.error(f"Rerank 重排序失败: {str(e)}")
-            return [{**merged_multi_docs, "score": None}]
+            raise
 
     def _step_3_cliff_cutoff(self, ranked_docs: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
         """断崖检测截断：相邻得分差距超过阈值时截断。"""

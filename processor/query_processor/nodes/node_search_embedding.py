@@ -1,4 +1,5 @@
 # processor/query_processor/nodes/node_search_embedding.py
+import json
 from config.milvus_config import milvus_config
 from processor.query_processor.base import NodeBase, T
 from processor.query_processor.state import QueryGraphState
@@ -53,7 +54,7 @@ class NodeSearchEmbedding(NodeBase):
                  #quoted = ", ".join(f'"{v}"' for v in item_names)
                  #expr = f"item_name in [{quoted}]"
                  # 'item_name in ["BrotherHAK-180烫金机","BrotherHAK180烫金机"]'
-            	 expr = f'item_name in {item_names}'
+                 expr = f'item_name in {json.dumps(item_names, ensure_ascii=False)}'
                  logger.info(f"过滤条件: {expr}")
              else:
                  logger.info("未指定商品名过滤，将全库检索")
@@ -74,7 +75,7 @@ class NodeSearchEmbedding(NodeBase):
                  collection_name=collection_name,  # 检索的目标集合名（文本片段向量集合）
                  reqs=reqs,  # 构造好的混合搜索请求对象（稠密+稀疏）
                  ranker_weights=(0.8, 0.2),  # 稠/稀疏向量评分权重配比，各占50%（可按业务调优）
-                 output_fields=["chunk_id", "content", "item_name"]  # 指定返回的业务字段
+                 output_fields=["chunk_id", "content", "item_name", "title", "file_title"]
              )
 
              # 7、构造并返回结果：若检索结果非空，取res[0]，否则返回空列表
@@ -82,7 +83,7 @@ class NodeSearchEmbedding(NodeBase):
 
          except Exception as e:
              logger.exception(f"向量搜索失败: {e}")
-             return {}
+             raise
 
 
 if __name__ == "__main__":

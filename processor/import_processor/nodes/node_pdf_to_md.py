@@ -98,7 +98,7 @@ class NodePDFToMD(BaseNode):
         }
 
         # 获取上传url和任务的batch_id
-        response = requests.post(url, headers=header, json=data)
+        response = requests.post(url, headers=header, json=data, timeout=(10, 60))
 
         # 对响应结果进行校验
         # 先校验http状态
@@ -116,7 +116,7 @@ class NodePDFToMD(BaseNode):
 
         # 3、文件上传
         with open(pdf_path_obj, "rb") as f:
-            res_upload = requests.put(signed_url, data=f)
+            res_upload = requests.put(signed_url, data=f, timeout=(10, 120))
             if res_upload.status_code != 200:
                 raise RuntimeError(f"文件上传失败：状态码：{res_upload.status_code}，响应结果：{res_upload}")
 
@@ -189,7 +189,7 @@ class NodePDFToMD(BaseNode):
 
         # 1、下载ZIP包
         logger.info(f"【ZIP下载】开始下载ZIP包：{zip_url} ...")
-        response = requests.get(zip_url)
+        response = requests.get(zip_url, timeout=(10, 120))
 
         # 对响应结果进行校验
         if response.status_code != 200:

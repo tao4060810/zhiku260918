@@ -24,12 +24,13 @@ class NodeEntry(BaseNode):
             raise ValueError(f"文件{import_file_path_obj.name}不存在")
 
         # 3. 判断文件类型
-        if import_file_path_obj.suffix == ".pdf":
+        if import_file_path_obj.suffix.lower() == ".pdf":
             state["is_pdf_read_enabled"] = True
             state["pdf_path"] = import_file_path
-        elif import_file_path_obj.suffix == ".md":
+        elif import_file_path_obj.suffix.lower() == ".md":
             state["is_md_read_enabled"] = True
             state["md_path"] = import_file_path
+            state["md_content"] = import_file_path_obj.read_text(encoding="utf-8-sig")
         else:
             raise ValueError(f"不支持的文件类型{import_file_path_obj.suffix}")
 

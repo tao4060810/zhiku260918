@@ -1,8 +1,6 @@
 import re
 from typing import List, Dict, Tuple
 
-from langchain_core.prompts import load_prompt
-
 from processor.query_processor.prompt.answer_prompt import ANSWER_PROMPT
 from tool.logger import logger
 
@@ -11,7 +9,8 @@ from processor.query_processor.state import QueryGraphState
 from utils.llm_utils import get_llm_client
 from utils.mongo_history_utils import save_chat_message
 from utils.sse_utils import push_to_session, SSEEvent
-from utils.task_utils import add_done_task, push_to_session
+from utils.task_utils import set_task_result, add_task_warning
+from utils.answer_presentation import present_answer, history_text
 
 MAX_CONTEXT_CHARS = 12000
 
@@ -53,26 +52,16 @@ class NodeAnswerOutput(NodeBase):
             self._step_3_generate_response(state, prompt)
 
 
-            # 提取图片URL（用于历史记录和前端展示）
-        image_urls = self._extract_images_from_docs(state.get("reranked_docs") or [])
+        presentation = present_answer(state.get("answer"), state.get("sources") or [])
+        state.update(presentation)
+        image_urls = presentation["image_urls"]
 
         # 阶段四：把答案写入到mongodb的history中
         if state.get("answer"):
             logger.info("---写入MongoDB历史记录---")
             self._step_4_write_history(state, image_urls=image_urls)
 
-        # 阶段五: 流式输出结束，发送 final 事件 [最后兜底，确保图片都能争取渲染和结束]
-        logger.info(f"---发送 final 事件---图片为：{image_urls}")
-        if state.get("is_stream"):
-            push_to_session(
-                state['session_id'],
-                SSEEvent.FINAL,
-                {
-                    "answer": state["answer"],
-                    "status": "completed",
-                    "image_urls": image_urls  # 发送图片URL给前端
-                }
-            )
+        # Web 服务在整个流程完成后统一发送 final，避免提前宣布成功。
 
         logger.info("---node_answer_output 节点处理结束---")
         return state
@@ -89,9 +78,9 @@ class NodeAnswerOutput(NodeBase):
       if answer:
         if is_stream:
           logger.info("---Step 1: 发现已有答案，执行流式推送---")
-          push_to_session(state["session_id"], SSEEvent.DELTA, {"delta": answer})
+          push_to_session(state.get("task_id"), SSEEvent.DELTA, {"delta": answer})
         else:
-          set_task_result(state["session_id"], "answer", answer)
+          set_task_result(state.get("task_id"), "answer", answer)
         return True
       else:
         return False
@@ -107,12 +96,14 @@ class NodeAnswerOutput(NodeBase):
         # 1. 获取问题和商品名
         # 优先使用重写后的问题
         question = state.get("rewritten_query") or state.get("original_query", "")
-        item_names = state["item_names"]
+        item_names = state.get("item_names") or []
 
         # 2. 格式化上下文文档
+        included_docs = []
         context_str, char_budget = self._format_reranked_docs(
-            state.get("reranked_docs") or [], char_budget
+            state.get("reranked_docs") or [], char_budget, included_docs
         )
+        state["sources"] = included_docs
 
         # 3. 格式化历史对话
         history_str, char_budget = self._format_chat_history(
@@ -124,7 +115,7 @@ class NodeAnswerOutput(NodeBase):
 
         # 5. 组装提示词
         prompt = ANSWER_PROMPT.format(
-            context=context_str or "无参考内容",
+            context=context_str or "暂无可用资料",
             history=history_str if history_str else "暂无历史对话",
             item_names=item_names_str,
             question=question,
@@ -133,7 +124,7 @@ class NodeAnswerOutput(NodeBase):
         return prompt
 
 
-    def _format_reranked_docs(self, reranked_docs: List[Dict], char_budget: int) -> Tuple[str, int]:
+    def _format_reranked_docs(self, reranked_docs: List[Dict], char_budget: int, included_docs=None) -> Tuple[str, int]:
         """格式化重排序文档，带字符预算控制"""
         formatted_lines = []
         used_chars = 0
@@ -151,7 +142,7 @@ class NodeAnswerOutput(NodeBase):
         #    确保 Prompt 长度在 LLM 的处理范围内，避免 Token 溢出。
         # ---------------------------------------------------------
         for idx, doc in enumerate(reranked_docs, start=1):
-            content = doc.get("content")
+            content = doc.get("content") or ""
             meta_tags = [f"[{idx}]"]
             for field, template in [
                 ("source", "[source={}]"),
@@ -159,7 +150,7 @@ class NodeAnswerOutput(NodeBase):
                 ("url", "[url={}]"),
                 ("title", "[title={}]"),
             ]:
-                field_value = str(doc.get(field)).strip()
+                field_value = str(doc.get(field) or "").strip()
                 if field_value:
                     meta_tags.append(template.format(field_value))
 
@@ -169,11 +160,16 @@ class NodeAnswerOutput(NodeBase):
 
             doc_entry = " ".join(meta_tags) + "\n" + content
 
-            if used_chars + len(doc_entry) > char_budget:
+            if used_chars + len(doc_entry) + 2 > char_budget:
                 break
 
             formatted_lines.append(doc_entry)
             used_chars += len(doc_entry) + 2
+            if included_docs is not None:
+                included_docs.append({
+                    **{key: doc.get(key) for key in ("title", "source", "url", "chunk_id", "score", "content")},
+                    "source_id": str(idx),
+                })
 
         return "\n\n".join(formatted_lines), char_budget - used_chars
 
@@ -187,6 +183,8 @@ class NodeAnswerOutput(NodeBase):
         for message in chat_history:
             role = message.get("role", "")
             text = message.get("text", "")
+            if role == "assistant":
+                text = history_text(text)
             if not text or role not in role_label_map:
                 continue
 
@@ -214,7 +212,7 @@ class NodeAnswerOutput(NodeBase):
 
         # 判断是否需要流式输出
         # 通常 state 中会注入 stream_queue 用于 SSE 推送
-        session_id = state.get("session_id")
+        session_id = state.get("task_id")
         is_stream = state.get("is_stream")
 
         if is_stream:
@@ -234,7 +232,7 @@ class NodeAnswerOutput(NodeBase):
             except Exception as e:
                 logger.error(f"流式生成出错: {e}", exc_info=True)
                 # 发生错误时，尝试推送到前端
-                push_to_session(session_id, SSEEvent.ERROR, {"error": str(e)})
+                raise
 
             state["answer"] = final_text
         else:
@@ -248,7 +246,10 @@ class NodeAnswerOutput(NodeBase):
                 logger.info(f"生成回答完成，长度: {len(content)}")
             except Exception as e:
                 logger.error(f"生成回答出错: {e}", exc_info=True)
-                state["answer"] = "抱歉，生成回答时出现错误。"
+                raise
+
+        if not state.get("answer"):
+            raise RuntimeError("模型没有返回答案，请稍后重试。")
 
         return state
 
@@ -335,11 +336,13 @@ class NodeAnswerOutput(NodeBase):
                     rewritten_query="",
                     item_names=item_names,
                     image_urls=image_urls,
+                    sources=state.get("sources"),
                     message_id=None
                 )
         except Exception as e:
             # 写历史失败不应影响主链路
             logger.error(f"写入Mongo历史记录失败: {e}")
+            add_task_warning(state.get("task_id"), "答案已生成，但保存会话失败。")
 
         return state
 

@@ -175,6 +175,8 @@ class NodeItemNameRecognition(BaseNode):
                 api_key=lm_config.api_key,
                 base_url=lm_config.base_url,
                 temperature=lm_config.llm_temperature,
+                timeout=90,
+                max_retries=1,
                 # extra_body={"enable_thinking": False}
             )
 
@@ -386,6 +388,7 @@ class NodeItemNameRecognition(BaseNode):
         # 捕获所有Milvus操作异常：连接中断、入库失败、索引错误等，不中断主流程
         except Exception as e:
             logger.warning(f"数据存入Milvus失败，原因：{str(e)}", exc_info=True)
+            raise
 
 
 
