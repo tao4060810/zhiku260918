@@ -1,0 +1,2 @@
+# zhiku260918
+智能转换RAG系统，使用mineru进行pdf转换，用vlm保留图片信息，用minio存储图片等静态资源，用milvus存储向量数据，mongdb存储会话信息
