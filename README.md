@@ -20,25 +20,34 @@ uv run uvicorn web.app:app --host 127.0.0.1 --port 8000
 - 文档管理：<http://127.0.0.1:8000/import.html>
 - 接口文档：<http://127.0.0.1:8000/docs>
 
-前端使用原生 HTML/CSS/JS，所有脚本、图标和 Markdown 渲染依赖已保存在本地，不需要运行前端开发服务器。导入和问答共用一个 FastAPI 服务，无需跨域配置。
+前端使用 Jinja2 模板与原生 HTML/CSS/JS，所有脚本、图标和 Markdown 渲染依赖已保存在本地，不需要运行前端开发服务器。导入和问答共用一个 FastAPI 服务，无需跨域配置。
 
-前端文件按资源类型组织；页面放在 `page/`，静态资源由 FastAPI 统一通过 `/static/` 提供：
+前端文件按资源类型和页面职责组织；两个页面继承公共模板，静态资源由 FastAPI 统一通过 `/static/` 提供：
 
 ```text
 web/
-├── page/
-│   └── index.html
+├── templates/
+│   ├── base.html         # 公共布局、导航和删除确认
+│   ├── chat.html         # 聊天页面
+│   └── import.html       # 文档管理页面
 └── static/
     ├── assets/
     │   └── brand.png
     ├── css/
-    │   └── app.css
+    │   ├── base.css
+    │   ├── chat.css
+    │   └── import.css
     ├── js/
-    │   └── app.js
+    │   ├── common.js     # 公共交互和侧栏会话管理
+    │   ├── import-status.js # 跨页面导入进度和界面锁定
+    │   ├── chat.js       # 聊天、流式恢复、引用和图片
+    │   └── import.js     # 上传、任务列表和筛选
     └── vendor/          # 第三方库及许可证
 ```
 
-当前业务脚本和样式仍各保留一个入口文件，后续按聊天、会话、文档导入等功能拆分时放入对应类型目录。
+每个页面只加载公共资源和自己的业务资源。切换页面使用正常链接跳转；返回聊天页时恢复当前会话及未完成任务，返回导入页时重新查询任务列表。页面离开不会取消已提交的后台任务；文件仍在上传时会提示确认离开。
+
+上传、排队、解析和入库期间显示不可关闭的导入进度弹窗，整个界面暂停其他操作。所有导入任务完成或失败后自动恢复；刷新页面也会重新读取任务并恢复弹窗。进度查询失败时保留锁定并自动重试。此限制作用于网页交互，后端仍保留会话冲突和任务容量校验。
 
 ## 环境配置
 
@@ -64,12 +73,10 @@ web/
 | GET | `/status/{task_id}` | 任务状态、完成/运行节点、错误与结果 |
 | GET | `/tasks` | 当前进程保留的导入记录 |
 | POST | `/query` | `{query, session_id?, is_stream?}`，默认流式 |
-| GET | `/stream/{session_id}?task_id=...` | SSE：ready / progress / delta / final / error |
+| GET | `/stream/{session_id}?task_id=...` | SSE：progress / delta / final / error |
 | GET | `/sessions` | 最近会话列表 |
 | GET | `/history/{session_id}` | 历史记录，支持 `limit`（1–500） |
 | DELETE | `/history/{session_id}` | 删除会话记录；进行中的会话返回 409 |
-| GET | `/health` | 应用存活检查 |
-| GET | `/health/services` | 三个中间件的 TCP 连通性，不代表模型/凭据验证 |
 
 每次提问分配独立 `task_id`，同一会话的重叠请求返回 409。SSE 支持 `Last-Event-ID` 重放，前端另外轮询任务状态以恢复最终答案。后台始终实际执行完整工作流，流式模式只改变答案推送方式。
 
@@ -86,6 +93,9 @@ web/
 ```powershell
 uv run python -m unittest discover -s test -p "test_*.py" -v
 node test/test_answer_view.cjs
+node test/test_session_delete.cjs
+node test/test_page_navigation.cjs
+node test/test_import_status.cjs
 ```
 
 自动化测试覆盖上传验证、批次回滚、路径安全、问答错误、SSE 重放与会话隔离、历史读写错误、Markdown 入口以及多路检索汇合。外部模型、数据库边界使用替身，运行测试不会提交真实导入或产生模型调用费用。

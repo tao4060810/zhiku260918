@@ -4,9 +4,9 @@ const fs = require('node:fs');
 const path = require('node:path');
 const vm = require('node:vm');
 
-const script = fs.readFileSync(path.join(__dirname, '../web/static/js/app.js'), 'utf8');
+const script = fs.readFileSync(path.join(__dirname, '../web/static/js/common.js'), 'utf8');
 // 只加载删除相关函数，避免执行页面初始化时的网络请求和事件绑定。
-const functions = script.slice(script.indexOf('function requestDeleteSession('), script.indexOf('function setView('));
+const functions = script.slice(script.indexOf('function requestDeleteSession('), script.indexOf('function openSession('));
 
 function setup() {
   // 每个场景使用独立状态；记录接口调用，模拟弹窗开关及删除后的页面变化。

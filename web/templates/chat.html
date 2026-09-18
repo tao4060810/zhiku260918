@@ -1,0 +1,60 @@
+{% extends "base.html" %}
+{# 聊天页仅加载 Markdown 处理、消息展示和问答交互所需资源。 #}
+{% block styles %}<link rel="stylesheet" href="/static/css/chat.css">{% endblock %}
+{% block scripts %}
+    <script src="/static/vendor/marked.umd.js" defer></script>
+    <script src="/static/vendor/purify.min.js" defer></script>
+    <script src="/static/js/chat.js" defer></script>
+{% endblock %}
+{% block content %}
+    <main id="chat-view" class="chat-view">
+        <div class="view-toolbar">
+            <div class="title-group"><span class="eyebrow">知识问答</span>
+                <h1 id="chat-title">新会话</h1></div>
+            <div class="toolbar-actions"><label class="switch-label"><input type="checkbox" id="stream-mode" checked
+                                                                            role="switch"><span
+                    class="switch-track"></span><span>流式回答</span></label>
+                <button class="icon-button" id="clear-chat" title="删除当前会话" aria-label="删除当前会话"><i
+                        data-lucide="trash-2"></i></button>
+            </div>
+        </div>
+        <!-- 消息挂载区：加载历史或发送问题时替换空状态，动态插入回答、引用和图片。 -->
+        <div class="messages" id="messages" aria-live="polite" aria-relevant="additions">
+            <div class="chat-empty" id="chat-empty"><img src="/static/assets/brand.png" alt="" width="64" height="64">
+                <h2>掌柜智库</h2>
+                <p>知识问答</p>
+                <div class="empty-rule"></div>
+            </div>
+        </div>
+        <div class="composer-wrap">
+            <form id="query-form" class="composer"><label class="sr-only" for="question">问题</label><textarea
+                    id="question" placeholder="输入你的问题…" rows="2" maxlength="4000" required></textarea>
+                <div class="composer-bottom"><span id="composer-status"><span
+                        class="status-dot good"></span>新会话</span>
+                    <div class="composer-buttons"><span id="char-count" class="muted small">0 / 4000</span>
+                        <button type="submit" class="send-button" id="send" title="发送问题" aria-label="发送问题"><i
+                                data-lucide="arrow-up"></i></button>
+                    </div>
+                </div>
+            </form>
+            <div class="composer-note"><span id="conversation-count">0 条消息</span><span>掌柜智库</span></div>
+        </div>
+    </main>
+{% endblock %}
+{% block dialogs %}
+<!-- 图片预览复用同一弹窗，点击回答中的图片时更新 preview-image 的 src。 -->
+<dialog id="image-dialog">
+    <button id="close-image" class="icon-button" aria-label="关闭图片" title="关闭图片"><i data-lucide="x"></i></button>
+    <img id="preview-image" alt="文档图片预览"></dialog>
+<!-- 引用详情：按当前消息的来源编号填充摘录；桌面显示侧栏，手机显示底部面板，无原文地址时隐藏链接。 -->
+<dialog id="source-dialog" aria-labelledby="source-title">
+    <div class="dialog-heading"><h2 id="source-title">资料依据</h2>
+        <button id="close-source" class="icon-button" aria-label="关闭依据" title="关闭依据"><i data-lucide="x"></i>
+        </button>
+    </div>
+    <div class="source-meta"><span id="source-kind"></span><a id="source-link" target="_blank" rel="noopener noreferrer"
+                                                              hidden>打开原文 <i data-lucide="external-link"></i></a>
+    </div>
+    <div id="source-excerpt" class="message-body" tabindex="0"></div>
+</dialog>
+{% endblock %}

@@ -3,7 +3,7 @@ const fs = require('node:fs');
 const vm = require('node:vm');
 const path = require('node:path');
 
-const app = fs.readFileSync(path.join(__dirname, '../web/static/js/app.js'), 'utf8');
+const app = fs.readFileSync(path.join(__dirname, '../web/static/js/chat.js'), 'utf8');
 const context = {};
 vm.runInNewContext(app.slice(app.indexOf('function streamText('), app.indexOf('function sourceTitle(')), context);
 const { streamText } = context;

@@ -1,12 +1,5 @@
-/* 浏览器统一通过同源 FastAPI 服务访问后端接口。 */
-const $ = (selector, root = document) => root.querySelector(selector);
-const $$ = (selector, root = document) => [...root.querySelectorAll(selector)];
-const labels = {upload_file:'上传文件',store_file:'原文件备份',node_entry:'文件识别',node_pdf_to_md:'PDF 解析',node_md_img:'图片处理',node_document_split:'文档切片',node_item_name_recognition:'主体识别',node_bge_embedding:'向量化',node_import_milvus:'存入知识库',node_item_name_confirm:'确认产品',node_search_embedding:'知识库检索',node_search_embedding_hyde:'假设文档检索',node_web_search_mcp:'网络搜索',node_rrf:'结果融合',node_rerank:'相关性排序',node_answer_output:'生成回答'};
-const statusNames = {pending:'排队中',processing:'处理中',completed:'已完成',failed:'失败'};
-const state = {view:location.pathname === '/import.html' ? 'import':'chat',session:localStorage.getItem('zhiku.session') || crypto.randomUUID(),sessions:[],tasks:[],files:[],filter:'all',busy:false,uploading:false,stream:null,taskId:null,loadVersion:0,sessionsVersion:0,deleteTarget:null,deleting:false,taskTimer:null,pollTimer:null,toastTimer:null};
-const icons = () => window.lucide?.createIcons();
-const escapeHTML = (value) => String(value ?? '').replace(/[&<>"']/g, char => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[char]));
-const icon = (name) => `<i data-lucide="${name}"></i>`;
+/* 聊天页：消息、流式订阅、历史恢复、引用与图片展示。公共能力由 common.js 提供。 */
+Object.assign(state,{stream:null,taskId:null,loadVersion:0,pollTimer:null});
 function safeURL(value) {
   try {const url = new URL(value, location.origin);return ['http:','https:'].includes(url.protocol) ? url.href : null;} catch {return null;}
 }
@@ -55,10 +48,6 @@ function openSource(article, sourceId) {
   link.hidden=!url;if(url)link.href=url;else link.removeAttribute('href');
   $('#source-dialog').showModal();$('#source-excerpt').scrollTop=0;
 }
-function toast(message) {
-  $('#toast').textContent = message;$('#toast').hidden = false;
-  clearTimeout(state.toastTimer);state.toastTimer = setTimeout(() => $('#toast').hidden = true, 5000);
-}
 async function copyAnswer(text) {
   try {
     if (!navigator.clipboard) throw new Error('Clipboard unavailable');
@@ -68,12 +57,6 @@ async function copyAnswer(text) {
     const input=document.createElement('textarea');input.value=text;input.className='copy-buffer';document.body.append(input);input.select();
     const copied=document.execCommand('copy');input.remove();toast(copied?'答案已复制。':'复制失败，请手动选择答案。');
   }
-}
-async function api(path, options = {}) {
-  const response = await fetch(path, options);
-  const data = await response.json().catch(() => ({}));
-  if (!response.ok) throw new Error(typeof data.detail === 'string' ? data.detail : '请求失败，请检查输入后重试。');
-  return data;
 }
 function setBusy(busy, text) {
   state.busy = busy;
@@ -89,61 +72,6 @@ function scrollBottom(force = false) {
   if (force || area.scrollHeight - area.scrollTop - area.clientHeight < 180) area.scrollTop = area.scrollHeight;
 }
 function updateCount() {$('#conversation-count').textContent = `${$$('.message').length} 条消息`;}
-function renderSessions() {
-  $('#session-list').innerHTML = state.sessions.length ? state.sessions.map(item => `<div class="session-row ${item.session_id===state.session?'active':''}"><button class="session-button" data-session="${escapeHTML(item.session_id)}" title="${escapeHTML(item.title || '新会话')}">${icon('message-square')}<span>${escapeHTML(item.title || '新会话')}</span></button><button type="button" class="icon-button session-delete" data-delete-session="${escapeHTML(item.session_id)}" title="删除会话" aria-label="删除会话：${escapeHTML(item.title || '新会话')}" ${state.deleting || (state.busy && item.session_id===state.session)?'disabled':''}>${icon('trash-2')}</button></div>`).join('') : '<p class="muted small">暂无会话</p>';
-  icons();
-}
-async function loadSessions() {
-  const version=++state.sessionsVersion;
-  try {const data=await api('/sessions');if(version!==state.sessionsVersion)return;state.sessions=data.items;renderSessions();}
-  catch (e) {if(version!==state.sessionsVersion)return;$('#session-list').innerHTML = `<p class="muted small">${escapeHTML(e.message)}</p><button class="text-button" id="retry-sessions">${icon('refresh-cw')}重新加载</button>`;icons();$('#retry-sessions').onclick=loadSessions;}
-}
-function requestDeleteSession(sessionId) {
-  if(state.deleting)return;
-  if(state.busy && sessionId===state.session){toast('当前会话仍在处理中，暂时无法删除。');return;}
-  state.deleteTarget=sessionId;
-  $('#delete-session-title').textContent=state.sessions.find(item=>item.session_id===sessionId)?.title || $('#chat-title').textContent || '新会话';
-  $('#delete-error').hidden=true;$('#delete-error').textContent='';
-  $('#confirm-dialog').returnValue='';$('#confirm-dialog').showModal();
-}
-async function deleteSession(event) {
-  if(event.submitter?.value!=='confirm')return;
-  event.preventDefault();
-  const sessionId=state.deleteTarget;if(!sessionId || state.deleting)return;
-  state.deleting=true;
-  const dialog=$('#confirm-dialog');
-  $$('button',dialog).forEach(button=>{button.disabled=true;});
-  $('#confirm-delete').textContent='正在删除…';$('#delete-error').hidden=true;
-  try {
-    await api(`/history/${encodeURIComponent(sessionId)}`,{method:'DELETE'});
-    state.sessionsVersion++;
-    state.sessions=state.sessions.filter(item=>item.session_id!==sessionId);
-    if(state.session===sessionId)newChat();else renderSessions();
-    dialog.close();toast('会话已删除。');loadSessions();
-  } catch(e) {
-    $('#delete-error').textContent=e.message;$('#delete-error').hidden=false;
-  } finally {
-    state.deleting=false;
-    $$('button',dialog).forEach(button=>{button.disabled=false;});
-    $('#confirm-delete').textContent='删除会话';
-    $$('[data-delete-session]').forEach(button=>{button.disabled=state.busy && button.dataset.deleteSession===state.session;});
-  }
-}
-function setView(view, push = true) {
-  state.view = view;$('#chat-view').hidden = view !== 'chat';$('#import-view').hidden = view !== 'import';
-  $('#view-name').textContent = view === 'chat'?'知识问答':'文档管理';
-  document.title = `掌柜智库 · ${$('#view-name').textContent}`;
-  $$('[data-view]').forEach(a => a.classList.toggle('active', a.dataset.view === view));
-  if (push) history.pushState({},'',view === 'chat'?'/chat.html':'/import.html');
-  closeMenu();
-  if (view === 'import') loadTasks();
-}
-function syncSidebar() {$('#sidebar').inert=matchMedia('(max-width:700px)').matches && !$('#sidebar').classList.contains('open');}
-function closeMenu() {$('#sidebar').classList.remove('open');$('#backdrop').hidden = true;syncSidebar();}
-function newChat() {
-  disconnect();state.loadVersion++;state.session=crypto.randomUUID();localStorage.setItem('zhiku.session',state.session);
-  $('#messages').replaceChildren(emptyState());$('#chat-title').textContent='新会话';$('#question').value='';updateInput();updateCount();renderSessions();setView('chat');$('#question').focus();
-}
 function emptyState() {
   const node=document.createElement('div');node.className='chat-empty';node.innerHTML='<img src="/static/assets/brand.png" alt="" width="64" height="64"><h2>掌柜智库</h2><p>知识问答</p><div class="empty-rule"></div>';return node;
 }
@@ -259,66 +187,16 @@ async function sendQuestion(question) {
     loadSessions();
   } catch(e) {if(version===state.loadVersion && session===state.session)fail(answer,e.message);}
 }
-function queueFiles(files) {
-  if(state.uploading)return;
-  for(const file of files) {
-    if(!/\.(pdf|md)$/i.test(file.name)){toast(`不支持的文件：${file.name}`);continue;}
-    if(!file.size || file.size>50*1024*1024){toast(`${file.name} 为空或超过 50 MB。`);continue;}
-    if(state.files.length>=10){toast('每次最多选择 10 个文件。');break;}
-    if(!state.files.some(f=>f.name===file.name && f.size===file.size))state.files.push(file);
-  }
-  renderQueue();
-}
-function renderQueue() {
-  $('#upload-queue').innerHTML=state.files.map((f,i)=>`<div class="queue-row">${icon('file-text')}<span>${escapeHTML(f.name)}</span><small>${f.size<1024*1024?`${Math.ceil(f.size/1024)} KB`:`${(f.size/1024/1024).toFixed(1)} MB`}</small><button class="icon-button" data-remove="${i}" title="移除文件" aria-label="移除 ${escapeHTML(f.name)}" ${state.uploading?'disabled':''}>${icon('x')}</button></div>`).join('');
-  $('#upload-actions').hidden=!state.files.length;$('#selection-count').textContent=`已选择 ${state.files.length} 份文档`;$('#upload-button').disabled=state.uploading;$('#choose-files').disabled=state.uploading;icons();
-}
-function uploadFiles() {
-  if(state.uploading || !state.files.length)return;
-  state.uploading=true;renderQueue();$('#upload-meter').hidden=false;$('#upload-progress').value=0;$('#upload-percent').textContent='0%';
-  const form=new FormData();state.files.forEach(f=>form.append('files',f));
-  const xhr=new XMLHttpRequest();xhr.open('POST','/upload');xhr.timeout=180000;
-  xhr.upload.onprogress=e=>{if(e.lengthComputable){const p=Math.round(e.loaded/e.total*100);$('#upload-progress').value=p;$('#upload-percent').textContent=p===100?'正在接收…':`${p}%`;}};
-  xhr.onload=()=>{let data;try{data=JSON.parse(xhr.responseText);}catch{data={detail:'上传失败。'};}
-    if(xhr.status>=200 && xhr.status<300){toast(`${data.task_ids.length} 份文档已进入导入队列。`);state.files=[];loadTasks();}
-    else toast(typeof data.detail==='string'?data.detail:'上传失败，请重试。');
-  };
-  xhr.onerror=()=>toast('上传连接失败，请检查服务状态。');xhr.ontimeout=()=>toast('上传超时，请重试。');
-  xhr.onloadend=()=>{state.uploading=false;$('#upload-meter').hidden=true;$('#files').value='';renderQueue();};xhr.send(form);
-}
-function renderTasks() {
-  $('#stat-total').innerHTML=`${state.tasks.length}<small>份</small>`;$('#stat-done').innerHTML=`${state.tasks.filter(t=>t.status==='completed').length}<small>份</small>`;$('#stat-running').innerHTML=`${state.tasks.filter(t=>['pending','processing'].includes(t.status)).length}<small>份</small>`;
-  const filter=$('#task-search').value.toLowerCase();
-  const tasks=state.tasks.filter(t=>(state.filter==='all' || (state.filter==='processing'?['pending','processing'].includes(t.status):t.status===state.filter)) && t.filename?.toLowerCase().includes(filter));
-  const open=new Set($$('.task-item[open]').map(x=>x.dataset.task));
-  $('#task-list').innerHTML=tasks.length?tasks.map(task=>`<details class="task-item" data-task="${task.task_id}" ${open.has(task.task_id)?'open':''}><summary class="task-summary"><div class="file-name"><span class="file-icon ${/\.pdf$/i.test(task.filename)?'pdf':''}">${icon('file-text')}</span><div><strong title="${escapeHTML(task.filename)}">${escapeHTML(task.filename)}</strong><small>${task.result.chunk_count!==undefined?`${task.result.chunk_count} 个切片`:(task.running_list.map(n=>labels[n]||n).join(' · ') || statusNames[task.status])}</small></div></div><span class="status-label ${task.status}"><span class="status-dot ${task.status==='completed'?'good':task.status==='failed'?'bad':'amber'}"></span>${statusNames[task.status]}</span><span class="task-time">${new Date(task.created_at*1000).toLocaleString('zh-CN',{month:'2-digit',day:'2-digit',hour:'2-digit',minute:'2-digit'})}</span>${icon('chevron-down')}</summary><div class="task-detail"><div class="progress-steps">${task.done_list.map(n=>`<span class="progress-step">${icon('check')}${escapeHTML(labels[n]||n)}</span>`).join('')}${task.running_list.map(n=>`<span class="progress-step">${icon('loader-circle')}${escapeHTML(labels[n]||n)}</span>`).join('')}</div>${task.error?`<p class="warning-line">${escapeHTML(task.error)}</p><button class="text-button retry-import" data-filename="${escapeHTML(task.filename)}">${icon('upload')}重新选择文件</button>`:''}${task.warnings.map(w=>`<p class="warning-line">${escapeHTML(w)}</p>`).join('')}${task.result.item_name?`<p class="muted small" style="margin-top:12px">${escapeHTML(task.result.item_name)}</p>`:''}</div></details>`).join(''):`<div class="task-empty">${icon('files')}<span>${state.tasks.length?'暂无匹配的文档':'暂无导入记录'}</span></div>`;
-  icons();
-}
-async function loadTasks() {
-  clearTimeout(state.taskTimer);
-  try {state.tasks=(await api('/tasks')).items;renderTasks();}
-  catch(e){$('#task-list').innerHTML=`<div class="task-empty">${escapeHTML(e.message)}</div>`;}
-  if(state.view==='import')state.taskTimer=setTimeout(loadTasks,2500);
-}
-async function refreshHealth() {
-  $('#refresh-health').disabled=true;
-  try {const result=await api('/health/services');$('#health-dot').className=`status-dot ${result.ok?'good':'amber'}`;$('#health-label').textContent=result.ok?'服务已连接':'部分服务离线';$('#service-list').innerHTML=Object.entries(result.services).map(([name,status])=>`<div class="service-row"><span>${name}</span><span><span class="status-dot ${status==='reachable'?'good':'bad'}"></span> ${status==='reachable'?'可连接':'未连接'}</span></div>`).join('');}
-  catch {$('#health-dot').className='status-dot bad';$('#health-label').textContent='服务未连接';$('#service-list').textContent='无法连接应用服务。';}
-  finally{$('#refresh-health').disabled=false;}
+// 新建会话只重置聊天页状态，后台已有任务不会因页面断开而被取消。
+function resetChat() {
+  disconnect();state.loadVersion++;
+  $('#messages').replaceChildren(emptyState());$('#chat-title').textContent='新会话';
+  $('#question').value='';updateInput();updateCount();$('#question').focus();
 }
 $('#query-form').onsubmit=e=>{e.preventDefault();sendQuestion($('#question').value.trim());};
 $('#question').oninput=updateInput;
 $('#question').onkeydown=e=>{if(e.key==='Enter' && !e.shiftKey && !e.isComposing){e.preventDefault();$('#query-form').requestSubmit();}};
-$('#new-chat').onclick=newChat;
-$('#menu-button').onclick=()=>{$('#sidebar').classList.add('open');$('#backdrop').hidden=false;syncSidebar();};$('#backdrop').onclick=closeMenu;
-matchMedia('(max-width:700px)').addEventListener('change',syncSidebar);
-$$('[data-view]').forEach(a=>a.onclick=e=>{e.preventDefault();setView(a.dataset.view);});
-window.onpopstate=()=>setView(location.pathname==='/import.html'?'import':'chat',false);
-$('#session-list').onclick=e=>{const remove=e.target.closest('[data-delete-session]');if(remove){requestDeleteSession(remove.dataset.deleteSession);return;}const button=e.target.closest('[data-session]');if(button){setView('chat');loadHistory(button.dataset.session);}};
 $('#clear-chat').onclick=()=>requestDeleteSession(state.session);
-$('#delete-session-form').onsubmit=deleteSession;
-$('#confirm-dialog').oncancel=e=>{if(state.deleting)e.preventDefault();};
-$('#confirm-dialog').onclose=()=>{state.deleteTarget=null;};
 $('#messages').onclick=async e=>{
   const article=e.target.closest('.message');
   if(e.target.closest('.copy-answer'))await copyAnswer(article.copyText ?? streamText(article.answer));
@@ -328,15 +206,12 @@ $('#messages').onclick=async e=>{
 };
 $('#close-image').onclick=()=>$('#image-dialog').close();
 $('#close-source').onclick=()=>$('#source-dialog').close();
-$('#choose-files').onclick=()=>$('#files').click();$('#files').onchange=e=>queueFiles(e.target.files);
-$('#upload-queue').onclick=e=>{const button=e.target.closest('[data-remove]');if(button && !state.uploading){state.files.splice(Number(button.dataset.remove),1);renderQueue();}};
-$('#dropzone').ondragover=e=>{e.preventDefault();if(!state.uploading)$('#dropzone').classList.add('dragging');};
-$('#dropzone').ondragleave=()=>$('#dropzone').classList.remove('dragging');
-$('#dropzone').ondrop=e=>{e.preventDefault();$('#dropzone').classList.remove('dragging');queueFiles(e.dataTransfer.files);};
-$('#upload-button').onclick=uploadFiles;$('#refresh-tasks').onclick=loadTasks;$('#refresh-health').onclick=refreshHealth;
-$('#task-search').oninput=renderTasks;
-$$('[data-filter]').forEach(b=>b.onclick=()=>{state.filter=b.dataset.filter;$$('[data-filter]').forEach(x=>x.setAttribute('aria-selected',String(x===b)));renderTasks();});
-$('#task-list').onclick=e=>{if(e.target.closest('.retry-import'))$('#files').click();};
 document.addEventListener('error',e=>{if(e.target.tagName==='IMG' && e.target.closest('.message')){e.target.alt='图片暂不可用';e.target.title='图片加载失败';}},true);
-setView(state.view,false);icons();refreshHealth();setInterval(refreshHealth,60000);
-loadSessions().then(()=>loadHistory(state.session));
+
+window.addEventListener('zhiku:new-chat',resetChat);
+window.addEventListener('zhiku:open-session',event=>loadHistory(event.detail));
+window.addEventListener('pagehide',()=>{state.loadVersion++;disconnect();});
+window.addEventListener('pageshow',event=>{if(event.persisted)loadHistory(state.session);});
+// 等侧栏标题加载后恢复历史；用户已切换会话时不覆盖其新操作。
+const initialLoadVersion=state.loadVersion;
+sessionsReady.then(()=>{if(state.loadVersion===initialLoadVersion)loadHistory(state.session);});

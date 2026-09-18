@@ -1,0 +1,75 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta name="theme-color" content="#147968">
+    <title>掌柜智库 · {{ page_title }}</title>
+    <link rel="icon" href="/static/assets/brand.png" type="image/png">
+    <link rel="stylesheet" href="/static/css/base.css">
+    {% block styles %}{% endblock %}
+    <!-- defer 保证先加载公共依赖，再执行公共脚本和当前页面的脚本。 -->
+    <script src="/static/vendor/lucide.min.js" defer></script>
+    <script src="/static/js/common.js" defer></script>
+    <script src="/static/js/import-status.js" defer></script>
+    {% block scripts %}{% endblock %}
+</head>
+<body data-view="{{ view }}">
+<!-- 移动端导航展开时显示遮罩，点击遮罩关闭侧栏。 -->
+<button class="backdrop" id="backdrop" aria-label="关闭导航" hidden></button>
+
+<!-- 公共侧栏：使用真实页面链接导航，当前页面由后端设置高亮。 -->
+<aside class="sidebar" id="sidebar">
+    <a href="/chat.html" class="brand"><img src="/static/assets/brand.png" alt="" width="32" height="32"><span>掌柜智库<small>ZHANGGUI KNOWLEDGE</small></span></a>
+    <nav aria-label="主导航">
+        <a class="nav-link{% if view == 'chat' %} active{% endif %}" href="/chat.html"{% if view == 'chat' %} aria-current="page"{% endif %}><i data-lucide="messages-square"></i>知识问答</a>
+        <a class="nav-link{% if view == 'import' %} active{% endif %}" href="/import.html"{% if view == 'import' %} aria-current="page"{% endif %}><i data-lucide="library-big"></i>文档管理</a>
+    </nav>
+    <div class="sidebar-heading"><span>最近会话</span>
+        <button id="new-chat" class="icon-button" title="新建会话" aria-label="新建会话"><i
+                data-lucide="square-pen"></i></button>
+    </div>
+    <!-- 会话列表由 common.js 填充，每条会话包含打开和删除入口。 -->
+    <div class="session-list" id="session-list"><p class="muted small">正在加载…</p></div>
+    <div class="sidebar-footer"><span class="workspace-icon"><i data-lucide="building-2"></i></span>
+        <div>我的工作空间<small>本地知识库</small></div>
+        <span class="local-dot"></span></div>
+</aside>
+
+<div class="workspace">
+    <!-- 顶栏展示当前页面位置，手机端提供导航入口。 -->
+    <header class="topbar">
+        <button class="icon-button mobile-menu" id="menu-button" title="打开导航" aria-label="打开导航"><i
+                data-lucide="menu"></i></button>
+        <div class="breadcrumb">工作空间<span>/</span><strong id="view-name">{{ page_title }}</strong></div>
+    </header>
+    {% block content %}{% endblock %}
+</div>
+<!-- 全局轻提示：反馈复制、上传和删除等操作结果，由 common.js 控制显示与自动隐藏。 -->
+<div class="toast" id="toast" role="status" hidden></div>
+<!-- 删除确认：打开时填入目标会话名称；JS 拦截确认提交，接口成功后关闭，失败时显示 delete-error。 -->
+<dialog id="confirm-dialog" aria-labelledby="delete-heading" aria-describedby="delete-description">
+    <form id="delete-session-form" method="dialog">
+        <div class="dialog-heading"><h2 id="delete-heading">删除这条会话？</h2>
+            <button class="icon-button" value="cancel" title="关闭" aria-label="关闭删除确认"><i data-lucide="x"></i>
+            </button>
+        </div>
+        <p id="delete-session-title"></p>
+        <p id="delete-description">该会话的全部聊天记录将被永久删除，无法恢复。已导入的知识库文档不受影响。</p>
+        <p id="delete-error" role="alert" hidden></p>
+        <div class="dialog-actions">
+            <button class="secondary-button" value="cancel" autofocus>取消</button>
+            <button id="confirm-delete" class="danger-button" value="confirm">删除会话</button>
+        </div>
+    </form>
+</dialog>
+{% block dialogs %}{% endblock %}
+<!-- 原生模态框会阻止背景区域的鼠标和键盘操作，导入结束后自动关闭。 -->
+<dialog id="import-status-dialog" aria-labelledby="import-status-title" aria-describedby="import-status-description">
+    <h2 id="import-status-title" tabindex="-1" autofocus>正在确认导入状态…</h2>
+    <p id="import-status-description">请稍候，正在读取后台任务进度。</p>
+    <div id="import-status-list" aria-live="polite"></div>
+    <p id="import-status-error" role="alert" hidden></p>
+</dialog>
+</body>
+</html>

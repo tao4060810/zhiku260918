@@ -1,0 +1,560 @@
+/* 公共样式：主题、布局、侧栏、按钮、进度标识及共享弹窗。 */
+:root {
+    font-family: Inter,"Segoe UI","Microsoft YaHei",sans-serif;
+    color: #252b2a;
+    background: #fff;
+    font-size: 14px;
+    --green: #147968;
+    --green-light: #eaf4f0;
+    --line: #e8ecea;
+    --muted: #808986;
+    --red: #ba4242;
+    --amber: #c18a2c;
+    letter-spacing: 0;
+}
+* {
+    box-sizing: border-box;
+}
+body {
+    margin: 0;
+}
+button, input, textarea {
+    font: inherit;
+}
+button, a, input, textarea, summary {
+    -webkit-tap-highlight-color: transparent;
+}
+button {
+    cursor: pointer;
+}
+button:disabled {
+    opacity: .48;
+    cursor: not-allowed;
+}
+button, a {
+    transition: background .15s,color .15s;
+}
+a {
+    color: inherit;
+    text-decoration: none;
+}
+button {
+    border: 0;
+    background: none;
+    color: inherit;
+}
+button:focus-visible, a:focus-visible, summary:focus-visible {
+    outline: 2px solid var(--green);
+    outline-offset: 3px;
+}
+input:focus-visible, textarea:focus-visible {
+    outline: none;
+}
+svg {
+    width: 18px;
+    height: 18px;
+    stroke-width: 1.7;
+    flex-shrink: 0;
+}
+[hidden] {
+    display: none!important;
+}
+h1, h2, p {
+    margin: 0;
+}
+h1 {
+    font-size: 23px;
+    font-weight: 650;
+    line-height: 1.5;
+}
+h2 {
+    font-size: 16px;
+    font-weight: 600;
+}
+.small {
+    font-size: 12px;
+}
+.muted {
+    color: var(--muted);
+}
+.sr-only {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    overflow: hidden;
+    clip: rect(0,0,0,0);
+}
+/* 两个页面共享的侧栏、会话入口与工作空间布局。 */
+.sidebar {
+    width: 246px;
+    background: #f7f9f8;
+    border-right: 1px solid var(--line);
+    position: fixed;
+    inset: 0 auto 0 0;
+    display: flex;
+    flex-direction: column;
+    padding: 30px 18px 18px;
+    z-index: 30;
+}
+.brand {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    padding: 0 10px 34px;
+    font-size: 19px;
+    font-weight: 650;
+}
+.brand img {
+    border-radius: 8px;
+}
+.brand small {
+    display: block;
+    color: #8a9490;
+    font-size: 8px;
+    font-weight: 500;
+    margin-top: 5px;
+}
+.nav-link {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    border-radius: 6px;
+    padding: 13px 15px;
+    margin-bottom: 5px;
+    color: #68726e;
+}
+.nav-link.active {
+    color: var(--green);
+    background: #e6f0eb;
+    font-weight: 600;
+}
+.nav-link:hover {
+    background: #edf1ee;
+}
+.sidebar-heading {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 25px 12px 8px;
+    font-size: 11px;
+    color: #939b97;
+}
+.icon-button {
+    width: 34px;
+    height: 34px;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    flex-shrink: 0;
+    border-radius: 6px;
+    color: #7a8580;
+}
+.icon-button:hover {
+    background: #edf1ef;
+    color: #252b2a;
+}
+.session-list {
+    overflow: auto;
+    flex: 1;
+    min-height: 0;
+    padding: 0 2px;
+}
+.session-list>p {
+    padding: 15px 12px;
+}
+.session-button {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    width: 100%;
+    padding: 12px 10px;
+    text-align: left;
+    color: #717b76;
+    border-radius: 5px;
+    margin: 2px 0;
+}
+.session-button span {
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    font-size: 12px;
+}
+.session-button svg {
+    width: 15px;
+    height: 15px;
+}
+.session-button:hover, .session-button.active {
+    background: #edf1ee;
+    color: #324c41;
+}
+.sidebar-footer {
+    border-top: 1px solid var(--line);
+    padding: 20px 7px 0;
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    font-size: 12px;
+}
+.workspace-icon {
+    width: 33px;
+    height: 33px;
+    border: 1px solid #dce4df;
+    display: grid;
+    place-items: center;
+    border-radius: 6px;
+    background: white;
+}
+.sidebar-footer small {
+    display: block;
+    color: #939b97;
+    font-size: 10px;
+    margin-top: 4px;
+}
+.local-dot {
+    margin-left: auto;
+    background: #369a71;
+    width: 6px;
+    height: 6px;
+    border-radius: 50%;
+}
+/* 工作区与页面导航顶栏。 */
+.workspace {
+    margin-left: 246px;
+    height: 100dvh;
+    display: flex;
+    flex-direction: column;
+}
+.topbar {
+    height: 70px;
+    border-bottom: 1px solid var(--line);
+    display: flex;
+    align-items: center;
+    padding: 0 38px;
+    gap: 15px;
+    flex-shrink: 0;
+}
+.breadcrumb {
+    font-size: 12px;
+    color: #939c97;
+    display: flex;
+    gap: 14px;
+    align-items: center;
+}
+.breadcrumb strong {
+    color: #56615b;
+    font-weight: 500;
+}
+.breadcrumb span {
+    color: #c3cbc6;
+}
+.status-dot {
+    display: inline-block;
+    width: 6px;
+    height: 6px;
+    border-radius: 50%;
+    background: #b4bdb7;
+    flex-shrink: 0;
+}
+.good {
+    background: #269474;
+}
+.bad {
+    background: var(--red);
+}
+.amber {
+    background: var(--amber);
+}
+.text-button {
+    display: inline-flex;
+    align-items: center;
+    gap: 7px;
+    color: var(--green);
+    font-size: 12px;
+    padding: 8px 0;
+}
+.text-button svg {
+    width: 14px;
+    height: 14px;
+}
+.mobile-menu {
+    display: none;
+}
+.eyebrow {
+    font-size: 10px;
+    color: #9aa29d;
+    display: block;
+    margin-bottom: 5px;
+}
+.progress-steps {
+    display: flex;
+    gap: 8px 16px;
+    flex-wrap: wrap;
+    margin-top: 10px;
+}
+.progress-step {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+}
+.progress-step svg {
+    width: 12px;
+    height: 12px;
+    color: var(--green);
+}
+.warning-line {
+    color: #a67829;
+    font-size: 11px;
+    margin-top: 8px;
+    line-height: 1.7;
+}
+/* 上传和会话删除共用的命令按钮。 */
+.secondary-button, .primary-button, .danger-button {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    gap: 8px;
+    padding: 9px 14px;
+    border-radius: 5px;
+    font-size: 12px;
+    min-height: 36px;
+    white-space: nowrap;
+}
+.secondary-button {
+    border: 1px solid #dce4df;
+    background: white;
+    color: #58675d;
+}
+.secondary-button:hover {
+    background: #f4f7f4;
+}
+.primary-button {
+    background: var(--green);
+    color: white;
+}
+.primary-button:hover {
+    background: #0c6657;
+}
+.danger-button {
+    background: var(--red);
+    color: white;
+}
+.secondary-button svg, .primary-button svg {
+    width: 15px;
+    height: 15px;
+}
+.task-empty {
+    min-height: 150px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    flex-direction: column;
+    gap: 10px;
+    font-size: 12px;
+    color: #a5afa7;
+}
+.task-empty svg {
+    width: 26px;
+    height: 26px;
+    color: #bac7bd;
+}
+/* 全局提示及删除确认弹窗。 */
+.toast {
+    position: fixed;
+    left: calc(50% + 90px);
+    bottom: 28px;
+    transform: translateX(-50%);
+    background: #2c4035;
+    color: white;
+    padding: 12px 20px;
+    max-width: min(500px,90vw);
+    border-radius: 6px;
+    box-shadow: 0 5px 20px #20382924;
+    z-index: 100;
+    font-size: 12px;
+    line-height: 1.6;
+}
+dialog {
+    border: 1px solid var(--line);
+    border-radius: 8px;
+    padding: 24px;
+    width: min(420px,calc(100vw - 32px));
+    color: #344438;
+    box-shadow: 0 15px 70px #17352230;
+}
+dialog::backdrop {
+    background: #14251d55;
+}
+.dialog-heading {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+}
+.dialog-heading h2 {
+    font-size: 17px;
+}
+dialog p {
+    font-size: 13px;
+    color: #829087;
+    margin: 14px 0 24px;
+}
+.dialog-actions {
+    display: flex;
+    justify-content: flex-end;
+    gap: 10px;
+}
+.backdrop {
+    position: fixed;
+    inset: 0;
+    background: #16261d50;
+    z-index: 25;
+}
+/* 响应式布局：中屏收紧留白，手机端切换为抽屉导航。 */
+@media(max-width:1000px) {
+    .sidebar {
+        width: 218px;
+        padding-left: 13px;
+        padding-right: 13px;
+    }
+    .workspace {
+        margin-left: 218px;
+    }
+    .topbar {
+        padding: 0 24px;
+    }
+}
+@media(max-width:700px) {
+    .sidebar {
+        transform: translateX(-100%);
+        width: 260px;
+        transition: transform .2s;
+    }
+    .sidebar.open {
+        transform: translateX(0);
+    }
+    .workspace {
+        margin-left: 0;
+    }
+    .mobile-menu {
+        display: flex;
+    }
+    .topbar {
+        height: 58px;
+        padding: 0 15px;
+        gap: 9px;
+    }
+    .breadcrumb {
+        font-size: 11px;
+        gap: 8px;
+    }
+    .breadcrumb>span {
+        margin: 0 2px;
+    }
+    .eyebrow {
+        font-size: 9px;
+    }
+    .toast {
+        left: 50%;
+        bottom: 22px;
+    }
+}
+/* 会话列表删除入口固定尺寸，长标题省略。 */
+.session-row {
+    display: flex;
+    align-items: center;
+    min-width: 0;
+    border-radius: 5px;
+    margin: 2px 0;
+}
+.session-row.active, .session-row:hover, .session-row:focus-within {
+    background: #edf1ee;
+}
+.session-row .session-button {
+    flex: 1;
+    min-width: 0;
+    width: auto;
+    margin: 0;
+    background: none;
+}
+.session-row.active .session-button {
+    color: #324c41;
+}
+.session-delete {
+    width: 30px;
+    height: 34px;
+    margin-right: 3px;
+    color: #939b97;
+}
+.session-delete svg {
+    width: 14px;
+    height: 14px;
+}
+.session-delete:hover {
+    color: var(--red);
+    background: #fceeee;
+}
+#delete-session-title {
+    font-weight: 600;
+    color: #344438;
+    overflow-wrap: anywhere;
+    margin: 16px 0 8px;
+    max-height: 120px;
+    overflow: auto;
+}
+#delete-description {
+    margin: 8px 0 20px;
+    line-height: 1.8;
+}
+#delete-error {
+    color: var(--red);
+    line-height: 1.7;
+    margin: 0 0 16px;
+}
+/* 导入模态框在两个页面共用，内容过长时仅滚动进度区域。 */
+#import-status-dialog {
+    width: min(560px, calc(100% - 32px));
+    max-height: 85dvh;
+}
+#import-status-dialog h2 {
+    margin: 0;
+    font-size: 20px;
+}
+/* 标题仅用于弹窗的初始朗读定位，不显示交互控件的焦点边框。 */
+#import-status-title:focus {
+    outline: none;
+}
+#import-status-dialog::backdrop {
+    background: rgba(22, 36, 30, .48);
+}
+#import-status-list {
+    max-height: 48dvh;
+    overflow-y: auto;
+}
+.import-status-item {
+    padding: 14px 0;
+    border-top: 1px solid var(--line);
+    overflow-wrap: anywhere;
+}
+.import-status-item strong {
+    display: block;
+    margin-bottom: 6px;
+}
+.import-status-item span {
+    color: var(--green);
+}
+.import-status-item p {
+    margin: 6px 0;
+}
+.import-status-item small {
+    color: var(--muted);
+    line-height: 1.8;
+}
+#import-status-error {
+    color: var(--red);
+}
+@media(prefers-reduced-motion:reduce) {
+    * {
+        animation: none!important;
+        scroll-behavior: auto!important;
+        transition: none!important;
+    }
+}

@@ -1,0 +1,54 @@
+{% extends "base.html" %}
+{# 导入页只负责文件上传和导入记录；公共会话入口由基础模板提供。 #}
+{% block styles %}<link rel="stylesheet" href="/static/css/import.css">{% endblock %}
+{% block scripts %}<script src="/static/js/import.js" defer></script>{% endblock %}
+{% block content %}
+    <!-- 上传进度表示文件传输；解析、向量化和入库进度显示在任务列表中。 -->
+    <main id="import-view" class="import-view">
+        <div class="import-heading">
+            <div><span class="eyebrow">知识库</span>
+                <h1>文档管理</h1></div>
+            <button id="refresh-tasks" class="icon-button" title="刷新文档列表" aria-label="刷新文档列表"><i
+                    data-lucide="refresh-cw"></i></button>
+        </div>
+        <div class="stats">
+            <div><span>本次服务导入</span><strong id="stat-total">0<small>份</small></strong></div>
+            <div><span><span class="status-dot good"></span>已完成</span><strong
+                    id="stat-done">0<small>份</small></strong></div>
+            <div><span><span class="status-dot amber"></span>处理中</span><strong
+                    id="stat-running">0<small>份</small></strong></div>
+        </div>
+        <section class="upload-section" aria-labelledby="upload-title">
+            <div class="section-heading"><h2 id="upload-title">导入文档</h2><span class="muted small">PDF / Markdown · 单文件 ≤ 50 MB</span>
+            </div>
+            <div id="dropzone" class="dropzone">
+                <div class="upload-symbol"><i data-lucide="file-up"></i></div>
+                <div class="dropzone-label">拖入文档</div>
+                <button type="button" id="choose-files" class="secondary-button"><i data-lucide="folder-open"></i>选择文件
+                </button>
+                <input type="file" id="files" accept=".pdf,.md" multiple hidden></div>
+            <div id="upload-queue"></div>
+            <div id="upload-actions" class="upload-actions" hidden><span class="muted small"
+                                                                         id="selection-count"></span>
+                <button id="upload-button" class="primary-button"><i data-lucide="upload"></i>开始导入</button>
+            </div>
+            <div class="upload-meter" id="upload-meter" hidden>
+                <progress id="upload-progress" max="100" value="0"></progress>
+                <span id="upload-percent">0%</span></div>
+        </section>
+        <section class="task-section" aria-labelledby="task-title">
+            <div class="section-heading"><h2 id="task-title">导入记录</h2><label class="search-box"><i
+                    data-lucide="search"></i><input id="task-search" placeholder="搜索文档"
+                                                    aria-label="搜索文档"></label></div>
+            <div class="filter-tabs" role="tablist" aria-label="导入状态">
+                <button role="tab" aria-selected="true" data-filter="all">全部</button>
+                <button role="tab" aria-selected="false" data-filter="processing">处理中</button>
+                <button role="tab" aria-selected="false" data-filter="completed">已完成</button>
+                <button role="tab" aria-selected="false" data-filter="failed">失败</button>
+            </div>
+            <div class="task-table-header"><span>文档名称</span><span>状态</span><span>导入时间</span><span></span>
+            </div>
+            <div id="task-list"></div>
+        </section>
+    </main>
+{% endblock %}

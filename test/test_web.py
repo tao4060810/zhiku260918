@@ -37,9 +37,36 @@ class WebTests(unittest.TestCase):
         self.client = self.enterContext(TestClient(app))
 
     def test_pages_and_assets(self):
-        for path in ("/", "/chat.html", "/import.html", "/static/js/app.js", "/static/css/app.css", "/static/assets/brand.png", "/docs", "/health"):
+        paths = ["/", "/chat.html", "/import.html", "/static/assets/brand.png", "/docs"]
+        paths += [f"/static/js/{name}.js" for name in ("common", "import-status", "chat", "import")]
+        paths += [f"/static/css/{name}.css" for name in ("base", "chat", "import")]
+        for path in paths:
             with self.subTest(path=path):
                 self.assertEqual(self.client.get(path).status_code, 200)
+
+    def test_pages_render_only_their_own_content_and_assets(self):
+        # 通过真实模板响应检查页面隔离，避免拆分后仍偷偷依赖另一个页面的 DOM。
+        for view, other, title in (("chat", "import", "知识问答"), ("import", "chat", "文档管理")):
+            with self.subTest(view=view):
+                response = self.client.get(f"/{view}.html")
+                self.assertEqual(response.template.name, f"{view}.html")
+                html = response.text
+                self.assertIn(f"<title>掌柜智库 · {title}</title>", html)
+                self.assertIn(f'id="{view}-view"', html)
+                self.assertNotIn(f'id="{other}-view"', html)
+                self.assertIn('/static/js/common.js', html)
+                self.assertIn('/static/css/base.css', html)
+                self.assertIn(f'/static/js/{view}.js', html)
+                self.assertIn(f'/static/css/{view}.css', html)
+                self.assertNotIn(f'/static/js/{other}.js', html)
+                self.assertNotIn(f'/static/css/{other}.css', html)
+                self.assertIn(f'href="/{view}.html" aria-current="page"', html)
+                self.assertIn('id="confirm-dialog"', html)
+                self.assertIn('id="import-status-dialog"', html)
+                self.assertIn('/static/js/import-status.js', html)
+                self.assertEqual('id="source-dialog"' in html, view == "chat")
+                self.assertEqual('/static/vendor/marked.umd.js' in html, view == "chat")
+                self.assertNotIn('{% ', html)
 
     def test_query_validation(self):
         for body in ({"query":"  "}, {"query":"a" * 4001}, {"query":"test", "session_id":"../../bad"}):
@@ -111,6 +138,17 @@ class WebTests(unittest.TestCase):
         self.assertEqual(response.status_code,400)
         run.assert_not_called()
         self.assertFalse(list(Path(self.temp.name).rglob('*.md')))
+
+    @patch('utils.task_utils.MAX_ACTIVE_TASKS', 1)
+    def test_batch_capacity_conflict_rolls_back(self):
+        # 普通 ValueError 仍转换成 409，且整批任务、临时文件正确回滚。
+        with patch('web.api.import_service.run_import_graph') as run:
+            response = self.client.post('/upload', files=[('files', ('a.md', b'valid')), ('files', ('b.md', b'valid'))])
+        self.assertEqual(response.status_code, 409)
+        self.assertEqual(response.json()['detail'], '任务队列已满，请稍后再试。')
+        run.assert_not_called()
+        self.assertFalse(list(Path(self.temp.name).rglob('*.md')))
+        self.assertTrue(all(task['status'] == 'failed' for task in tasks.list_tasks()))
 
     def test_history_returns_images_and_sources(self):
         records=[{'_id':123,'role':'assistant','text':'ok[cite:1]','image_urls':['https://example.com/image.png'],'sources':[{'title':'Manual','source_id':'1','source':'local','content':'![diagram](https://example.com/image.png)'}]}]
