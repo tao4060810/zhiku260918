@@ -365,3 +365,6 @@ progress::-webkit-progress-value {
         gap: 22px;
     }
 }
+
+/* 已入库文档与配额区域：展示持久化文档和受保护的下载入口。 */
+.document-section{margin:24px 0 0;padding:24px;border:1px solid #dbe5df;border-radius:12px;background:white}.document-section h2{font-size:18px}.document-section a{color:#147968;white-space:nowrap}

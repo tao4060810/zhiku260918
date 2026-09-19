@@ -1,4 +1,5 @@
 # processor/import_processor/nodes/node_import_milvus.py
+from utils.knowledge_access import kb_filter
 import json
 import logging
 from typing import Dict, Any, List
@@ -6,15 +7,13 @@ from pymilvus import DataType
 from config.milvus_config import milvus_config
 from processor.import_processor.base import BaseNode
 from processor.import_processor.state import ImportGraphState
-from utils.milvus_utils import get_milvus_client, escape_milvus_string
+from utils.milvus_utils import get_milvus_client, escape_milvus_string, validate_private_schema
 from tool.logger import logger
 
 class NodeImportMilvus(BaseNode):
     """
     导入向量库节点：数据持久化
     """
-
-    name = "node_import_milvus"
 
     name: str = "node_import_milvus"
 
@@ -41,11 +40,17 @@ class NodeImportMilvus(BaseNode):
         # 步骤1：输入数据有效性校验
         chunks_json_data, vector_dimension = self._step_1_check_input(state)
 
+        # 为每个切片附上知识库、文档和导入版本，后续检索与清理按这些字段限定范围。
+        for chunk in chunks_json_data:
+            chunk["kb_id"] = state["kb_id"]
+            chunk["document_id"] = state["document_id"]
+            chunk["import_task"] = state["task_id"]
+
         # 步骤2：Milvus客户端连接+集合准备（自动建表）
         client = self._step_2_prepare_collection(vector_dimension)
 
         # 步骤3：幂等性处理 - 清理同file_title旧数据
-        self._step_3_clean_old_data(client, chunks_json_data)
+        # 先写新版本，全部成功后才切换 active_task；失败仍可查询旧版本。
 
         # 步骤4：批量插入数据+主键chunk_id回填
         updated_chunks = self._step_4_insert_data(client, chunks_json_data)
@@ -120,6 +125,7 @@ class NodeImportMilvus(BaseNode):
         if not milvus_client.has_collection(collections_name):
             self._create_chunks_collection(collections_name, milvus_client, vector_dimension)
 
+        validate_private_schema(milvus_client, collections_name)
         return milvus_client
 
     def _create_chunks_collection(self, collections_name, milvus_client, vector_dimension):
@@ -132,6 +138,10 @@ class NodeImportMilvus(BaseNode):
         schema.add_field(field_name="title", datatype=DataType.VARCHAR, max_length=100)  # 切片标题
         schema.add_field(field_name="parent_title", datatype=DataType.VARCHAR, max_length=100)  # 父标题
         schema.add_field(field_name="part", datatype=DataType.INT8)  # 分片编号
+        # 隔离字段必须显式存在于集合结构中，不能与缺少这些字段的旧集合混用。
+        schema.add_field(field_name="import_task", datatype=DataType.VARCHAR, max_length=36)
+        schema.add_field(field_name="kb_id", datatype=DataType.VARCHAR, max_length=36)
+        schema.add_field(field_name="document_id", datatype=DataType.VARCHAR, max_length=36)
         schema.add_field(field_name="file_title", datatype=DataType.VARCHAR, max_length=100)  # 源文件标题
         schema.add_field(field_name="item_name", datatype=DataType.VARCHAR, max_length=100)  # 商品名称（幂等性依据）
         schema.add_field(field_name="sparse_vector", datatype=DataType.SPARSE_FLOAT_VECTOR)  # 稀疏向量
@@ -162,33 +172,6 @@ class NodeImportMilvus(BaseNode):
             index_params=index_params
         )
 
-
-    def _step_3_clean_old_data(self, client, chunks_json_data):
-
-        """
-        幂等清理
-        基于每个片段的file_title进行旧数据的清理
-        :param client: milvus客户端
-        :param chunks_json_data: chunks数据
-        :return:
-        """
-
-        # 1. 获取查询条件
-        file_title = chunks_json_data[0].get("file_title")
-
-        # 2. 执行幂等清理
-        self._clear_chunks_by_file_title(client, file_title)
-
-    def _clear_chunks_by_file_title(self, client, file_title):
-
-        try:
-            file_title = escape_milvus_string(file_title)
-            client.delete(
-                collection_name=milvus_config.chunks_collection,
-                filter=f"file_title=='{file_title}'")
-        except Exception as e:
-            logger.error(f"Milvus 数据删除失败: {str(e)}")
-            raise RuntimeError(f"Milvus 数据删除失败: {str(e)}")
 
     def _step_4_insert_data(self, client, chunks_json_data):
         """

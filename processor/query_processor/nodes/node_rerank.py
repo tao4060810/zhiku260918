@@ -1,4 +1,5 @@
 # processor/query_processor/nodes/node_rerank.py
+from utils.knowledge_access import check_local_docs
 from typing import Dict, Any, List
 
 from processor.query_processor.base import NodeBase
@@ -64,7 +65,7 @@ class NodeRerank(NodeBase):
                 "title": rrf_doc.get('title'),
                 "chunk_id": rrf_doc.get('chunk_id'),
                 "url": None,
-                "source": "local"
+                "source": "local", "kb_id": rrf_doc.get("kb_id"), "document_id": rrf_doc.get("document_id")
             }
             final_docs.append(format_rrf_doc)
 
@@ -80,7 +81,8 @@ class NodeRerank(NodeBase):
             }
             final_docs.append(format_web_doc)
 
-        return final_docs
+        # 重排过程中保留本地资料的归属字段，返回前再次检查知识库范围。
+        return check_local_docs(final_docs, state["kb_id"])
 
     def _step_2_rerank_merged_docs(self, state: QueryGraphState, merged_multi_docs: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
         """使用 Reranker 模型对文档进行精排"""

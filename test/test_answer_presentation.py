@@ -1,5 +1,6 @@
 # 答案展示回归测试：覆盖旧版引用兼容、来源校验和图片筛选。
 import copy
+from uuid import uuid4
 import unittest
 from types import SimpleNamespace
 from unittest.mock import patch
@@ -9,9 +10,11 @@ from utils.answer_presentation import history_text, present_answer, present_hist
 
 class AnswerPresentationTests(unittest.TestCase):
     def setUp(self):
+        self.user_id=str(uuid4());self.kb_id=str(uuid4())
+        self.enterContext(patch("processor.query_processor.nodes.node_answer_output.require_kb_permission"))
         self.docs = [
-            {"title": "First", "source": "local", "content": "First evidence"},
-            {"title": "Second", "source": "local", "content": "Second evidence"},
+            {"title": "First", "source": "local", "kb_id":self.kb_id,"document_id":str(uuid4()), "content": "First evidence"},
+            {"title": "Second", "source": "local", "kb_id":self.kb_id,"document_id":str(uuid4()), "content": "Second evidence"},
         ]
 
     def test_legacy_history_resolves_original_ids_without_mutation(self):
@@ -42,8 +45,8 @@ class AnswerPresentationTests(unittest.TestCase):
 
     def test_only_selected_images_from_cited_local_docs_with_limit(self):
         # 混合重复图片、外部地址和网络资料图片，验证本地来源白名单及三张上限。
-        urls = [f"https://example.com/{i}.png" for i in range(5)]
-        docs = [{"source": "local", "content": "\n".join(f"![diagram]({u})" for u in urls)},
+        urls = [f"/assets/{uuid4()}" for i in range(5)]
+        docs = [{"source": "local", "kb_id":self.kb_id,"document_id":str(uuid4()), "content": "\n".join(f"![diagram]({u})" for u in urls)},
                 {"source": "web", "content": "![web](https://example.com/web.png)"}]
         text = "Steps[cite:1][cite:2]\n【图片】\n" + "\n".join([urls[3], urls[3], "https://evil.test/x.png", "https://example.com/web.png", *urls])
         result = present_answer(text, docs)
@@ -62,7 +65,7 @@ class AnswerPresentationTests(unittest.TestCase):
     def test_budget_excluded_documents_cannot_be_cited(self):
         # 第二份资料超过上下文预算；未提供给模型的内容不能成为有效引用。
         from processor.query_processor.nodes.node_answer_output import NodeAnswerOutput
-        state = {"original_query": "How?", "reranked_docs": [self.docs[0], {**self.docs[1], "content": "x" * 13000}]}
+        state = {"user_id":self.user_id,"kb_id":self.kb_id,"original_query": "How?", "reranked_docs": [self.docs[0], {**self.docs[1], "content": "x" * 13000}]}
         node = NodeAnswerOutput()
         node._step_2_construct_prompt(state)
         self.assertEqual([s["source_id"] for s in state["sources"]], ["1"])
@@ -74,7 +77,7 @@ class AnswerPresentationTests(unittest.TestCase):
         for streaming in (True, False):
             with self.subTest(streaming=streaming):
                 llm = SimpleNamespace(stream=lambda prompt: iter([SimpleNamespace(content="Answer[cite:"), SimpleNamespace(content="2][cite:99]")]), invoke=lambda prompt: SimpleNamespace(content="Answer[cite:2][cite:99]"))
-                state = {"original_query": "How?", "reranked_docs": self.docs, "is_stream": streaming}
+                state = {"user_id":self.user_id,"kb_id":self.kb_id,"original_query": "How?", "reranked_docs": self.docs, "is_stream": streaming}
                 with patch("processor.query_processor.nodes.node_answer_output.get_llm_client", return_value=llm), patch("processor.query_processor.nodes.node_answer_output.save_chat_message") as save, patch("processor.query_processor.nodes.node_answer_output.push_to_session"), patch("processor.query_processor.nodes.node_answer_output.set_task_result"):
                     result = NodeAnswerOutput().process(state)
                 self.assertEqual(result["answer"], "Answer[cite:2]")

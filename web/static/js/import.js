@@ -16,21 +16,23 @@ function renderQueue() {
 }
 function uploadFiles() {
   if(state.uploading || isImportLocked() || !state.files.length)return;
-  state.uploading=true;beginImportUpload();renderQueue();$('#upload-meter').hidden=false;$('#upload-progress').value=0;$('#upload-percent').textContent='0%';
+  // 每次提交使用新批次 ID；任务 ID 尚未返回时，终止按钮仍可定位本次上传。
+  state.uploading=true;state.uploadId=crypto.randomUUID();beginImportUpload();renderQueue();$('#upload-meter').hidden=false;$('#upload-progress').value=0;$('#upload-percent').textContent='0%';
   const form=new FormData();state.files.forEach(f=>form.append('files',f));
-  const xhr=new XMLHttpRequest();xhr.open('POST','/upload');xhr.timeout=180000;
+  // 使用 XHR 获取上传进度；请求携带知识库和 CSRF 信息，账号切换后忽略旧响应。
+  const xhr=new XMLHttpRequest();state.uploadXHR=xhr;const epoch=authState.epoch;xhr.open('POST',`/upload?kb_id=${encodeURIComponent(authState.kbId)}&upload_id=${state.uploadId}`);xhr.setRequestHeader('X-CSRF-Token',authState.csrf);xhr.timeout=180000;
   xhr.upload.onprogress=e=>{if(e.lengthComputable){const p=Math.round(e.loaded/e.total*100);updateImportUpload(p);$('#upload-progress').value=p;$('#upload-percent').textContent=p===100?'正在接收…':`${p}%`;}};
-  xhr.onload=()=>{let data;try{data=JSON.parse(xhr.responseText);}catch{data={detail:'上传失败。'};}
+  xhr.onload=()=>{if(epoch!==authState.epoch || authState.expired)return;if(xhr.status===401){expireAuth();return;}let data;try{data=JSON.parse(xhr.responseText);}catch{data={detail:'上传失败。'};}
     if(xhr.status>=200 && xhr.status<300){acceptImportTasks(data.task_ids,state.files);state.files=[];}
     else toast(typeof data.detail==='string'?data.detail:'上传失败，请重试。');
   };
   xhr.onerror=()=>toast('上传连接失败，请确认后端已启动并检查网络连接。');xhr.ontimeout=()=>toast('上传超时，请重试。');
-  xhr.onloadend=()=>{state.uploading=false;$('#upload-meter').hidden=true;$('#files').value='';renderQueue();finishImportUpload();};xhr.send(form);
+  xhr.onloadend=()=>{state.uploading=false;if(authState.expired)return;$('#upload-meter').hidden=true;$('#files').value='';renderQueue();finishImportUpload();};xhr.send(form);
 }
 function renderTasks() {
-  $('#stat-total').innerHTML=`${state.tasks.length}<small>份</small>`;$('#stat-done').innerHTML=`${state.tasks.filter(t=>t.status==='completed').length}<small>份</small>`;$('#stat-running').innerHTML=`${state.tasks.filter(t=>['pending','processing'].includes(t.status)).length}<small>份</small>`;
+  $('#stat-total').innerHTML=`${state.tasks.length}<small>份</small>`;$('#stat-done').innerHTML=`${state.tasks.filter(t=>t.status==='completed').length}<small>份</small>`;$('#stat-running').innerHTML=`${state.tasks.filter(importActive).length}<small>份</small>`;
   const filter=$('#task-search').value.toLowerCase();
-  const tasks=state.tasks.filter(t=>(state.filter==='all' || (state.filter==='processing'?['pending','processing'].includes(t.status):t.status===state.filter)) && t.filename?.toLowerCase().includes(filter));
+  const tasks=state.tasks.filter(t=>(state.filter==='all' || (state.filter==='processing'?importActive(t):t.status===state.filter)) && t.filename?.toLowerCase().includes(filter));
   const open=new Set($$('.task-item[open]').map(x=>x.dataset.task));
   $('#task-list').innerHTML=tasks.length?tasks.map(task=>`<details class="task-item" data-task="${task.task_id}" ${open.has(task.task_id)?'open':''}><summary class="task-summary"><div class="file-name"><span class="file-icon ${/\.pdf$/i.test(task.filename)?'pdf':''}">${icon('file-text')}</span><div><strong title="${escapeHTML(task.filename)}">${escapeHTML(task.filename)}</strong><small>${task.result.chunk_count!==undefined?`${task.result.chunk_count} 个切片`:(task.running_list.map(n=>labels[n]||n).join(' · ') || statusNames[task.status])}</small></div></div><span class="status-label ${task.status}"><span class="status-dot ${task.status==='completed'?'good':task.status==='failed'?'bad':'amber'}"></span>${statusNames[task.status]}</span><span class="task-time">${new Date(task.created_at*1000).toLocaleString('zh-CN',{month:'2-digit',day:'2-digit',hour:'2-digit',minute:'2-digit'})}</span>${icon('chevron-down')}</summary><div class="task-detail"><div class="progress-steps">${task.done_list.map(n=>`<span class="progress-step">${icon('check')}${escapeHTML(labels[n]||n)}</span>`).join('')}${task.running_list.map(n=>`<span class="progress-step">${icon('loader-circle')}${escapeHTML(labels[n]||n)}</span>`).join('')}</div>${task.error?`<p class="warning-line">${escapeHTML(task.error)}</p><button class="text-button retry-import" data-filename="${escapeHTML(task.filename)}">${icon('upload')}重新选择文件</button>`:''}${task.warnings.map(w=>`<p class="warning-line">${escapeHTML(w)}</p>`).join('')}${task.result.item_name?`<p class="muted small" style="margin-top:12px">${escapeHTML(task.result.item_name)}</p>`:''}</div></details>`).join(''):`<div class="task-empty">${icon('files')}<span>${state.tasks.length?'暂无匹配的文档':'暂无导入记录'}</span></div>`;
   icons();
@@ -39,7 +41,7 @@ function loadTasks() {
   return refreshImportTasks();
 }
 // 使用公共轮询的结果，任务列表与界面锁定始终基于同一份后台状态。
-window.addEventListener('zhiku:import-tasks',event=>{state.tasks=event.detail;renderTasks();});
+window.addEventListener('zhiku:import-tasks',event=>{state.tasks=event.detail;renderTasks();loadDocuments();});
 $('#choose-files').onclick=()=>$('#files').click();$('#files').onchange=e=>queueFiles(e.target.files);
 $('#upload-queue').onclick=e=>{const button=e.target.closest('[data-remove]');if(button && !state.uploading){state.files.splice(Number(button.dataset.remove),1);renderQueue();}};
 $('#dropzone').ondragover=e=>{e.preventDefault();if(!state.uploading)$('#dropzone').classList.add('dragging');};
@@ -52,3 +54,12 @@ $('#task-list').onclick=e=>{if(e.target.closest('.retry-import'))$('#files').cli
 
 // 页面跳转会中断仍在传输的文件；已提交的后台导入任务不受影响。
 window.addEventListener('beforeunload',event=>{if(state.uploading){event.preventDefault();event.returnValue='';}});
+
+async function loadDocuments(){
+  // 从持久化文档记录读取配额和已发布原文件地址，不依赖当前进程的任务历史。
+  try{const data=await api(`/knowledge-bases/${authState.kbId}/documents?limit=100`);
+    $('#document-quota').textContent=`${data.total} / ${data.quota.max_documents} 份文档 · ${(data.quota.used_bytes/1024/1024).toFixed(1)} MB / ${(data.quota.max_bytes/1024/1024).toFixed(0)} MB`;
+    $('#document-list').innerHTML=data.items.length?data.items.map(doc=>`<div class="queue-row"><span>${escapeHTML(doc.filename)}</span><small>${({ready:'已入库',pending:'处理中',failed:'导入失败'})[doc.status] || '待重试'}</small>${doc.download_url?`<a href="${escapeHTML(doc.download_url)}" download>下载原文件</a>`:''}</div>`).join(''):'<p class="muted small">还没有文档，上传后仅你可以查询。</p>';
+  }catch(e){if(!authState.expired)$('#document-quota').textContent=e.message;}
+}
+authReady.then(valid=>{if(valid)loadDocuments();});

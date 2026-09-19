@@ -8,6 +8,9 @@ class QueryGraphState(TypedDict):
     包含整个查询流程中传递的所有数据。
     """
 
+    user_id: str  # 提问用户 ID，用于校验知识库权限及读写聊天历史。
+    kb_id: str  # 本次问答固定使用的知识库 ID，各路本地检索必须限定此范围。
+    document_id: str  # 文档范围字段；具体候选资料也各自携带所属文档 ID。
     task_id: str
     session_id: str  # 会话ID
     message_id: str  # 消息ID

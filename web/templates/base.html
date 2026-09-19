@@ -14,7 +14,8 @@
     <script src="/static/js/import-status.js" defer></script>
     {% block scripts %}{% endblock %}
 </head>
-<body data-view="{{ view }}">
+{# 初始隐藏私有区域，common.js 确认 Cookie 对应用户与页面用户一致后再显示。 #}
+<body data-view="{{ view }}" data-user-id="{{ user._id }}" class="auth-pending">
 <!-- 移动端导航展开时显示遮罩，点击遮罩关闭侧栏。 -->
 <button class="backdrop" id="backdrop" aria-label="关闭导航" hidden></button>
 
@@ -32,7 +33,7 @@
     <!-- 会话列表由 common.js 填充，每条会话包含打开和删除入口。 -->
     <div class="session-list" id="session-list"><p class="muted small">正在加载…</p></div>
     <div class="sidebar-footer"><span class="workspace-icon"><i data-lucide="building-2"></i></span>
-        <div>我的工作空间<small>本地知识库</small></div>
+        <div>{{ user.username }}<small>我的私有知识库</small></div>
         <span class="local-dot"></span></div>
 </aside>
 
@@ -42,6 +43,7 @@
         <button class="icon-button mobile-menu" id="menu-button" title="打开导航" aria-label="打开导航"><i
                 data-lucide="menu"></i></button>
         <div class="breadcrumb">工作空间<span>/</span><strong id="view-name">{{ page_title }}</strong></div>
+        <div class="account-actions"><button id="change-password" class="text-button" type="button">修改密码</button><button id="logout" class="text-button" type="button">退出登录</button></div>
     </header>
     {% block content %}{% endblock %}
 </div>
@@ -64,12 +66,24 @@
     </form>
 </dialog>
 {% block dialogs %}{% endblock %}
+{# 修改密码通过同源接口提交，成功后所有旧凭证失效，前端返回登录页。 #}
+<dialog id="password-dialog" aria-labelledby="password-heading">
+  <form id="password-form">
+    <div class="dialog-heading"><h2 id="password-heading">修改密码</h2><button id="close-password" type="button" class="text-button">关闭</button></div>
+    <label>当前密码<input name="current_password" type="password" autocomplete="current-password" maxlength="128" required></label>
+    <label>新密码<input name="new_password" type="password" autocomplete="new-password" minlength="12" maxlength="128" required></label>
+    <label>确认新密码<input name="password_confirm" type="password" autocomplete="new-password" minlength="12" maxlength="128" required></label>
+    <p class="muted small">密码为 12–128 个字符。修改成功后，所有设备都需要重新登录。</p>
+    <p id="password-error" role="alert" hidden></p><button type="submit" class="primary-button">保存密码</button>
+  </form>
+</dialog>
 <!-- 原生模态框会阻止背景区域的鼠标和键盘操作，导入结束后自动关闭。 -->
 <dialog id="import-status-dialog" aria-labelledby="import-status-title" aria-describedby="import-status-description">
     <h2 id="import-status-title" tabindex="-1" autofocus>正在确认导入状态…</h2>
     <p id="import-status-description">请稍候，正在读取后台任务进度。</p>
     <div id="import-status-list" aria-live="polite"></div>
     <p id="import-status-error" role="alert" hidden></p>
+    <button id="import-cancel" class="text-button" type="button">终止上传</button>
 </dialog>
 </body>
 </html>

@@ -350,7 +350,7 @@ class NodeDocumentSplit(BaseNode):
 
         try:
             # 拼接备份文件路径：固定文件名，便于查找
-            backup_path = Path("D:/output") / state.get("file_title") / "chunks.json"
+            backup_path = Path(state["file_dir"]) / "chunks.json"
             # 写入JSON文件：保留中文/格式化缩进，便于人工查看
             with open(backup_path, "w", encoding="utf-8") as f:
                 """

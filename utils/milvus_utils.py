@@ -6,7 +6,39 @@ milvus_uri = milvus_config.milvus_url
 
 _milvus_client = None
 
+
+def validate_private_schema(client, collection_name):
+    """
+    确认向量集合包含知识库、文档及导入版本字段
+    :param client: 数据库或存储客户端
+    :param collection_name: 待检查的 Milvus 集合名
+    """
+    fields = {f["name"]: f for f in client.describe_collection(collection_name=collection_name)["fields"]}
+    if not {"kb_id", "document_id", "import_task"} <= fields.keys():
+        raise RuntimeError("向量集合缺少私有知识库字段，请使用新的 PRIVATE_* 集合名称。")
+
+
+def cleanup_import_vectors(task, *, keep_current=False):
+    """
+    在当前知识库和文档范围内清理指定导入版本的向量
+    :param task: 含知识库、文档和任务 ID 的记录
+    :param keep_current: True 删除旧版本；False 仅删除当前任务产生的向量
+    """
+    from utils.knowledge_access import kb_filter
+    import json
+    client = get_milvus_client()
+    expr = kb_filter(task["kb_id"], document_id=task["document_id"])
+    expr += f' and import_task {"!=" if keep_current else "=="} {json.dumps(task["task_id"])}'
+    for name in (milvus_config.chunks_collection, milvus_config.item_name_collection):
+        if client.has_collection(name):
+            validate_private_schema(client, name)
+            client.delete(collection_name=name, filter=expr)
+
 def get_milvus_client():
+    """
+    延迟创建并复用 Milvus 客户端
+    :return: 带请求超时设置的 Milvus 客户端
+    """
     global _milvus_client
     if _milvus_client is not None:
         return _milvus_client
@@ -88,6 +120,9 @@ def hybrid_search(client, collection_name, reqs, ranker_weights=(0.5, 0.5), norm
         # 初始化加权排名器：按权重融合稠密/稀疏向量的搜索结果
         # norm_score=True：先将两个向量评分归一化到0~1区间，再加权计算，避免一个得分特别大、另一个特别小导致权重失效。
         # 版本：V2.4
+        if not client.has_collection(collection_name):
+            return [[]]
+        validate_private_schema(client, collection_name)
         rerank = WeightedRanker(ranker_weights[0], ranker_weights[1], norm_score=norm_score)
         # 默认返回字段：文档标识字段
         if output_fields is None:

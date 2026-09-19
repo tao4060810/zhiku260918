@@ -7,7 +7,9 @@ from urllib.parse import urlsplit
 CITATION = re.compile(r"\[cite:(\d+)\]")
 LEGACY_CITATION = re.compile(r"[（(]\s*参考(?:内容|资料)?\s*((?:\[\d+\]\s*)+)[）)]")
 CODE = re.compile(r"(```[\s\S]*?```|~~~[\s\S]*?~~~|`[^`\n]+`)")
-MARKDOWN_IMAGE = re.compile(r"!\[[^\]]*\]\((https?://[^\s)]+)(?:\s+\"[^\"]*\")?\)")
+MARKDOWN_IMAGE = re.compile(r"!\[[^\]]*\]\(([^\s)]+)(?:\s+\"[^\"]*\")?\)")
+# 图片展示仅接受受保护的资产路径；具体归属由来源清理及资产下载接口再检查。
+PRIVATE_IMAGE = re.compile(r"/assets/[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}")
 
 
 def _map_prose(text, transform):
@@ -27,7 +29,7 @@ def document_images(docs):
         if doc.get("source") != "local":
             continue
         for url in MARKDOWN_IMAGE.findall(doc.get("content") or ""):
-            if url not in images:
+            if PRIVATE_IMAGE.fullmatch(url) and url not in images:
                 images.append(url)
     return images
 
@@ -40,7 +42,7 @@ def present_answer(text, sources, selected_images=None):
     def strip_images(part):
         if "【图片】" in part:
             part, image_block = part.split("【图片】", 1)
-            image_choices.extend(re.findall(r"https?://[^\s<>]+", image_block))
+            image_choices.extend(PRIVATE_IMAGE.findall(image_block))
         image_choices.extend(MARKDOWN_IMAGE.findall(part))
         return MARKDOWN_IMAGE.sub("", part)
 
@@ -71,7 +73,7 @@ def present_answer(text, sources, selected_images=None):
     allowed_images = set(document_images(cited))
     images = []
     for url in image_choices:
-        if url in allowed_images and url not in images and urlsplit(url).scheme in {"http", "https"}:
+        if url in allowed_images and url not in images and PRIVATE_IMAGE.fullmatch(url):
             images.append(url)
     return {"answer": text, "sources": cited, "image_urls": images[:3]}
 

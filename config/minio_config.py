@@ -18,6 +18,7 @@ minio_config = MinIOConfig(
     endpoint=os.getenv("MINIO_ENDPOINT"),
     access_key=os.getenv("MINIO_ACCESS_KEY"),
     secret_key=os.getenv("MINIO_SECRET_KEY"),
-    bucket_name=os.getenv("MINIO_BUCKET_NAME"),
+    # 新资产写入私有桶，通过 Web 鉴权接口访问，不复用旧公开图片桶。
+    bucket_name=os.getenv("MINIO_PRIVATE_BUCKET", "zhiku-private"),
     img_dir=os.getenv("MINIO_IMG_DIR"),
 )

@@ -1,12 +1,12 @@
+from utils.knowledge_store import store_asset
 # processor/import_processor/nodes/node_md_img.py
 import base64
 import json
 import os
 import re
-import time
-from collections import deque
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
-from typing import Tuple, List, Dict, Deque
+from typing import Tuple, List, Dict
 from langchain_openai import ChatOpenAI
 from minio import Minio
 from minio.deleteobjects import DeleteObject
@@ -63,7 +63,7 @@ class NodeMDImg(BaseNode):
         summaries = self._step_3_generate_summaries(md_path_obj.stem, target_images)
 
         # 步骤4：上传图片至MinIO，替换MD图片路径并填充摘要
-        new_md_content = self._step_4_upload_and_replace(md_path_obj.stem, target_images, summaries, md_content)
+        new_md_content = self._step_4_upload_and_replace(state, target_images, summaries, md_content)
 
         # 步骤5：备份并保存新MD文件
         new_md_file_name = self._step_5_backup_new_md_file(state['md_path'], new_md_content)
@@ -175,63 +175,36 @@ class NodeMDImg(BaseNode):
     def _step_3_generate_summaries(self, doc_stem: str, target_images: List[Tuple[str, str, Tuple[str, str]]]) -> Dict[
         str, str]:
         """
-        步骤3：批量为待处理图片生成内容摘要，带API速率限制防止触发大模型限流
+        步骤3：以最多5路并发为图片生成摘要，按完成顺序记录进度
         :param doc_stem: 文档文件名（不含后缀），作为大模型prompt上下文
-        :param targets: 待处理图片列表，元素为(图片文件名, 图片完整路径, 图片上下文)
-        :param requests_per_minute: 每分钟最大API请求数，默认9次（按大模型限制调整）
+        :param target_images: 待处理图片列表，元素为(图片文件名, 图片完整路径, 图片上下文)
         :return: 图片摘要字典，键：图片文件名，值：图片内容摘要
         """
         summaries = {}
 
-        # 1、外部初始化双端队列，用于API速率限制，跨循环复用
-        request_deque = deque()
+        total = len(target_images)
+        if not total:
+            return summaries
 
-        # 2、循环处理图片
-        for img_file, image_path, context in target_images:
-            # 2.1、速率限制
-            self._apply_api_rate_limit(request_deque, max_requests=10)
+        # 1、完整工作流仍串行执行，仅在本节点并发请求图片模型。
+        # 并发表示同时处理的请求数，不是每分钟次数；使用5路为当前10路额度留出余量。
+        logger.info(f"开始生成图片摘要：{doc_stem}，共{total}张，最多5路并发")
+        with ThreadPoolExecutor(max_workers=5, thread_name_prefix="image-summary") as executor:
+            # 2、保存任务与图片文件名的对应关系，避免返回顺序不同导致摘要串图。
+            futures = {
+                executor.submit(
+                    self._summarize_image, image_path, root_folder=doc_stem, image_content=context
+                ): img_file
+                for img_file, image_path, context in target_images
+            }
 
-            # 2.2、调用大模型生成图片摘要
-            summaries[img_file] = self._summarize_image(image_path, root_folder=doc_stem, image_content=context)
+            # 3、由当前线程统一收集结果；全部完成后再交给后续步骤上传和替换MD。
+            # 完成数包含调用失败后使用默认描述的图片，具体错误沿用原有日志记录。
+            for completed, future in enumerate(as_completed(futures), start=1):
+                summaries[futures[future]] = future.result()
+                logger.info(f"图片处理完成 {completed}/{total}：{doc_stem}，{futures[future]}")
 
         return summaries
-
-    def _apply_api_rate_limit(
-            self,
-            request_times: Deque[float],
-            max_requests: int,
-            window_seconds: int = 60
-    ) -> None:
-        """
-        通用滑动窗口API速率限制器（抽离为公共工具）
-        核心逻辑：维护请求时间戳双端队列，窗口内请求数超上限则自动等待，防止触发第三方API限流
-        :param request_times: 存储请求时间戳的双端队列，需外部初始化（全局/单例），跨调用复用
-        :param max_requests: 速率限制窗口内的最大允许请求次数
-        :param window_seconds: 速率限制滑动窗口时长，默认60秒（1分钟）
-        :return: None，超出限制时会阻塞等待
-        """
-        current_time = time.time()
-
-        # 1. 清理滑动窗口外的过期请求时间戳，保证队列仅存窗口内的请求
-        while request_times and current_time - request_times[0] >= window_seconds:
-            request_times.popleft()
-
-        # 2. 窗口内请求数达上限，计算并阻塞等待剩余时间
-        if len(request_times) >= max_requests:
-            # 计算需要等待的时长（窗口总时长 - 最早请求已存在的时长）
-            sleep_duration = window_seconds - (current_time - request_times[0])
-            if sleep_duration > 0:
-                logger.info(
-                    f"触发API速率限制，窗口{window_seconds}秒内最多{max_requests}次，需等待：{sleep_duration:.2f} 秒")
-                time.sleep(sleep_duration)
-                # 等待后更新当前时间，重新清理过期请求（避免等待期间有请求过期）
-                current_time = time.time()
-                while request_times and current_time - request_times[0] >= window_seconds:
-                    request_times.popleft()
-
-        # 3. 记录当前请求时间戳，加入滑动窗口队列
-        request_times.append(current_time)
-        logger.info(f"API请求时间戳已记录，当前{window_seconds}秒窗口内请求数：{len(request_times)}")
 
     def _summarize_image(self, image_path: str, root_folder: str, image_content: Tuple[str, str]) -> str:
         """
@@ -278,105 +251,22 @@ class NodeMDImg(BaseNode):
             logger.error(f"图像总结失败：{image_path}, 错误{e}")
             return "图片描述"
 
-    def _step_4_upload_and_replace(self, doc_stem: str, target_images: List[Tuple[str, str, Tuple[str, str]]],
-                                   summaries: Dict[str, str], md_content: str) -> str:
+    def _step_4_upload_and_replace(self, state, target_images, summaries, md_content):
         """
-        步骤 4: 上传图片并合并信息，然后替换 Markdown 中的内容。
-
-        流程：
-        1. 确定 MinIO 上的上传目录（按文档名隔离）。
-        2. 清理该目录下的旧数据。
-        3. 批量上传图片。
-        4. 合并“图片摘要”和“图片URL”。
-        5. 替换 Markdown 文本中的图片引用。
-        :param doc_stem: 文档文件名（不含后缀），作为MinIO上传子目录名（按文档隔离）
-        :param target_images: 待处理图片列表，元素为(图片文件名, 图片完整路径, 图片上下文)
-        :param summaries: 图片摘要字典，键：图片文件名，值：内容摘要
-        :param md_content: 原始MD文件内容
-        :return: 图片引用替换后的新MD内容
+        上传图片到私有存储，并将 Markdown 图片引用替换为受保护地址
+        :param state: 含用户、知识库、文档和任务 ID 的导入状态
+        :param target_images: 待处理图片的文件名、路径及附加信息列表
+        :param summaries: 以图片文件名为键的摘要字典
+        :param md_content: 待替换图片引用的 Markdown 正文
+        :return: 合并图片摘要和私有资产地址后的 Markdown 内容
         """
-
-        # 获取MinIO客户端
-        minio_client = get_minio_client()
-
-        # 构造上传目录，去除文件名中的空格
-        minio_img_dir = minio_config.img_dir
-        upload_dir = f"{minio_img_dir}/{doc_stem}".replace(" ", "")
-
-        # 步骤1：清理该文档对应的MinIO旧目录
-        self._clean_minio_directory(minio_client, upload_dir)
-
-        # 步骤2：批量上传图片至MinIO，获取URL映射
-        urls = self._upload_images_batch(minio_client, upload_dir, target_images)
-
-        # 步骤3：合并图片摘要和URL，过滤上传失败的图片
-        image_info = self._merge_summary_and_url(summaries, urls)
-
-        # 步骤4：替换MD内容中的本地图片引用为MinIO远程引用
-        md_content = self._process_md_file(md_content, image_info)
-
-        return md_content
-
-    def _clean_minio_directory(self, minio_client: Minio, prefix: str) -> None:
-        """
-        幂等性清理：上传前先删除 MinIO 中指定目录下的旧文件。
-        防止重名文件导致的内容混淆或垃圾堆积。
-        :param minio_client: 初始化完成的MinIO客户端对象
-        :param prefix: MinIO目录前缀（要清理的目录路径）
-        """
-        try:
-            objects_to_delete = minio_client.list_objects(minio_config.bucket_name, prefix=prefix, recursive=True)
-            # 构造删除列表
-            delete_list = [DeleteObject(obj.object_name) for obj in objects_to_delete]
-            if delete_list:
-                errors = minio_client.remove_objects(minio_config.bucket_name, delete_list)
-                for error in errors:
-                    logger.error(f"删除失败：{error}")
-        except Exception as e:
-            logger.error(f"清理minio目录失败：{e}")
-
-    def _upload_images_batch(self, minio_client: Minio, upload_dir: str, target_images: List[Tuple]) -> Dict[str, str]:
-        """
-        批量上传待处理图片至MinIO，返回图片文件名与访问URL的映射关系
-        :param minio_client: 初始化完成的MinIO客户端对象
-        :param upload_dir: MinIO上传根目录
-        :param target_images: 待处理图片列表，元素为(图片文件名, 图片完整路径, 图片上下文)
-        :return: 图片URL字典，键：图片文件名，值：MinIO访问URL
-        """
+        # 1. 将图片登记到本次文档和导入版本下，不生成公开桶地址
         urls = {}
-        for img_file, img_path, _ in target_images:
-            object_name = f"{upload_dir}/{img_file}"
-            urls[img_file] = self._upload_to_minio(minio_client, img_path, object_name)
-        return urls
-
-    def _upload_to_minio(self, minio_client: Minio, local_path: str, object_name: str) -> str | None:
-        """
-        将单张本地图片上传至MinIO对象存储，并返回公网可访问URL
-        :param minio_client: 初始化完成的MinIO客户端对象
-        :param local_path: 图片本地完整路径
-        :param object_name: MinIO中要存储的对象名称
-        :return: 图片MinIO访问URL（上传失败返回None）
-        """
-        try:
-            # 上传本地文件至MinIO（fput_object：文件流上传，适合大文件）
-            minio_client.fput_object(
-                bucket_name=minio_config.bucket_name,  # MinIO存储桶名（从配置读取）
-                object_name=object_name,  # MinIO对象名称
-                file_path=local_path,  # 本地文件路径
-                # 关键规则：多后缀文件仅拆分最后一个，如test.tar.gz拆分为("test.tar", ".gz")。
-                content_type=f"image/{os.path.splitext(local_path)[1][1:]}"
-            )
-
-            # 处理路径特殊字符，避免URL解析错误
-            object_name = object_name.replace("\\", "%5C")
-
-            # 构造MinIO基础访问URL
-            base_url = f"http://{minio_config.endpoint}/{minio_config.bucket_name}"
-
-            return f"{base_url}/{object_name}"
-
-        except Exception as e:
-            logger.error(f"图片上传MinIO失败：{local_path}，错误信息：{str(e)}")
+        for filename, path, _ in target_images:
+            urls[filename] = store_asset(state["user_id"], state["kb_id"], state["document_id"],
+                                         state["task_id"], path, "image")
+        # 2. 合并摘要和地址，再替换正文中的图片引用
+        return self._process_md_file(md_content, self._merge_summary_and_url(summaries, urls))
 
     def _merge_summary_and_url(self, summaries: Dict[str, str], urls: Dict[str, str]) -> Dict[str, Tuple[str, str]]:
         """

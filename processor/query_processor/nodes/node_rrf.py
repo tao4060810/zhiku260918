@@ -5,6 +5,7 @@ from processor.query_processor.base import NodeBase
 from processor.query_processor.state import QueryGraphState
 from tool.logger import logger
 from utils.json_format_utils import format_json as serialize_json
+from utils.knowledge_access import check_local_docs
 
 
 class NodeRrf(NodeBase):
@@ -17,6 +18,9 @@ class NodeRrf(NodeBase):
     name: str = "node_rrf"
 
     def process(self, state: QueryGraphState) -> QueryGraphState:
+        # 融合前再次检查两路本地候选的归属，防止范围外数据进入重排和提示词。
+        check_local_docs(state.get('embedding_chunks') or [], state['kb_id'], hits=True)
+        check_local_docs(state.get('hyde_embedding_chunks') or [], state['kb_id'], hits=True)
         # 1. 获取各路搜索的结果（排除网络搜索: reranK节点做）
         embedding_search_list = [
             doc.get('entity') for doc in (state.get('embedding_chunks') or []) if isinstance(doc, dict)

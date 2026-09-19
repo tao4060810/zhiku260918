@@ -12,8 +12,9 @@ function navigation(view) {
   const events = [];
   const visits = [];
   const context = {
+    accountKey:'zhiku.session.alice',
     state: {view, session:'old'},
-    localStorage: {setItem:(key,value)=>stored.set(key,value)},
+    localStorage: {setItem:(key,value)=>stored.set(key,value),removeItem:key=>stored.delete(key)},
     crypto: {randomUUID:()=> 'new-session'},
     location: {assign:url=>visits.push(url)},
     Event: class {constructor(type){this.type=type;}},
@@ -33,6 +34,7 @@ function historyFixture() {
   const requests = [];
   const element = () => ({textContent:'',innerHTML:'',replaceChildren(){messages.length=0;},append(){}});
   const context = {
+    accountKey:'zhiku.session.alice',
     state:{session:'current',sessions:[],loadVersion:0},
     $:selector=>{if(selector==='.message')return messages[0];if(!elements.has(selector))elements.set(selector,element());return elements.get(selector);},
     localStorage:{setItem(){}},
@@ -60,11 +62,11 @@ function historyFixture() {
   for(const view of ['import','chat']) {
     const f=navigation(view);
     f.context.openSession('selected');
-    assert.equal(f.stored.get('zhiku.session'),'selected');
+    assert.equal(f.stored.get('zhiku.session.alice'),'selected');
     if(view==='import')assert.deepEqual(f.visits,['/chat.html']);
     else {assert.equal(f.events[0].type,'zhiku:open-session');assert.equal(f.events[0].detail,'selected');assert.equal(f.visits.length,0);}
     f.context.newChat();
-    assert.equal(f.stored.get('zhiku.session'),'new-session');
+    assert.equal(f.stored.has('zhiku.session.alice'),false);assert.equal(f.context.state.session,null);
     if(view==='chat')assert.equal(f.events[1].type,'zhiku:new-chat');
     else assert.equal(f.visits.length,2);
   }

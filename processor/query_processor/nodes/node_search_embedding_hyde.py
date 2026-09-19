@@ -1,3 +1,4 @@
+from utils.knowledge_access import search_filter, check_local_docs
 # processor/query_processor/nodes/node_search_embedding_hyde.py
 import json
 from config.milvus_config import milvus_config
@@ -51,7 +52,7 @@ class NodeSearchEmbeddingHyde(NodeBase):
             res = self._step_2_search_embedding_hyde(
                 rewritten_query=rewritten_query,
                 hyde_doc=hyde_doc,
-                item_names=item_names
+                item_names=item_names, kb_id=state["kb_id"]
             )
 
             # 4、结果封装
@@ -91,7 +92,7 @@ class NodeSearchEmbeddingHyde(NodeBase):
             self,
             rewritten_query: str,
             hyde_doc: str,
-            item_names=None
+            item_names=None, *, kb_id
     ):
         """
         阶段2：利用“重写问题 + 假设性文档”生成 embedding，并到向量库检索切片。
@@ -99,6 +100,7 @@ class NodeSearchEmbeddingHyde(NodeBase):
         :param rewritten_query: 改写后的查询
         :param hyde_doc: Step 1 生成的假设性文档
         :param item_names: 商品名称列表，用于元数据过滤 (item_name in [...])
+        :param kb_id: 本次问答的知识库 ID，只检索其已发布的文档版本
         :return: 检索结果列表
         """
 
@@ -117,16 +119,8 @@ class NodeSearchEmbeddingHyde(NodeBase):
             # 3. 获取Milvus的集合
             collection_name = milvus_config.chunks_collection
 
-            # 4、处理 item_names 中的引号，防止注入或语法错误
-            expr = None
-            if item_names:
-                #quoted = ", ".join(f'"{v}"' for v in item_names)
-                #expr = f"item_name in [{quoted}]"
-                # 'item_name in ["BrotherHAK-180烫金机","BrotherHAK180烫金机"]'
-                expr = f'item_name in {json.dumps(item_names, ensure_ascii=False)}'
-                logger.info(f"步骤2: 过滤条件: {expr}")
-            else:
-                logger.info("步骤2: 未指定商品名过滤，将全库检索")
+            # 4. 限定知识库及已发布版本，并安全编码可选产品名称条件
+            expr = search_filter(kb_id, item_names=item_names)
 
             # 5、构造Milvus混合搜索请求对象
             reqs = create_hybrid_search_requests(
@@ -144,10 +138,10 @@ class NodeSearchEmbeddingHyde(NodeBase):
                 collection_name=collection_name,
                 reqs=reqs,
                 ranker_weights=(0.8, 0.2),
-                output_fields=["chunk_id", "content", "item_name", "title", "file_title"],
+                output_fields=["chunk_id", "content", "item_name", "title", "file_title", "kb_id", "document_id"],
             )
 
-            return res[0] if res else []
+            return check_local_docs(res[0] if res else [], kb_id, hits=True)
 
         except Exception as e:
             logger.error(f"步骤2: 检索过程发生异常: {e}")

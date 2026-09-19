@@ -1,3 +1,4 @@
+from utils.knowledge_access import search_filter, check_local_docs
 # processor/query_processor/nodes/node_item_name_confirm.py
 
 import json
@@ -38,13 +39,13 @@ class NodeItemNameConfirm(NodeBase):
         logger.info(f"步骤1：参数校验通过")
 
         # 步骤2：获取历史记录
-        history = get_recent_messages(session_id)
+        history = get_recent_messages(session_id, user_id=state["user_id"], kb_id=state["kb_id"])
         logger.info(f"步骤2：获取到 {len(history)} 条历史消息")
         # 更新状态
         state["history"] = history
 
         # 步骤3：用户初始消息保存
-        message_id = save_chat_message(session_id, "user", original_query)
+        message_id = save_chat_message(session_id, "user", original_query, user_id=state["user_id"], kb_id=state["kb_id"])
         logger.info(f"步骤3：用户消息已初始保存, ID: {message_id}")
 
         # 步骤4：提取信息
@@ -58,7 +59,7 @@ class NodeItemNameConfirm(NodeBase):
         # 5. & 6. 如果有提取到商品名，进行搜索和对齐
         align_result = {}
         if len(item_names) > 0:
-            query_results = self._step_5_vectorize_and_query(item_names)
+            query_results = self._step_5_vectorize_and_query(item_names, state["kb_id"])
             align_result = self._step_6_align_item_names(query_results)
         else:
             logger.info("Node: 未提取到商品名，跳过向量检索")
@@ -166,10 +167,11 @@ class NodeItemNameConfirm(NodeBase):
             # 异常时返回默认结果：空商品名列表+原始查询
             return {"item_names": [], "rewritten_query": query}
 
-    def _step_5_vectorize_and_query(self, item_names) -> List[Dict]:
+    def _step_5_vectorize_and_query(self, item_names, kb_id) -> List[Dict]:
         """
            把分析出的item_names逐个向量化（BGEM3模型），并在Milvus向量数据库(kb_item_names)中执行混合搜索，获取匹配评分
            :param item_names: 列表[字符串] - 步骤4中 提取的商品名列表（如["苹果15", "华为P60"]）
+           :param kb_id: 本次问答所属知识库，只搜索其已发布版本的产品索引
            :return: 列表[字典] - 格式：
                 [
                     {
@@ -216,7 +218,7 @@ class NodeItemNameConfirm(NodeBase):
                 reqs = create_hybrid_search_requests(
                     dense_vector=dense_vector,
                     sparse_vector=sparse_vector,
-                    limit=5
+                    limit=5, expr=search_filter(kb_id)
                 )
 
                 # 执行BGEM3混合向量搜索，获取数据库中的匹配结果和评分
@@ -228,7 +230,7 @@ class NodeItemNameConfirm(NodeBase):
                     ranker_weights=(0.8, 0.2),  # 稠/稀疏向量评分权重配比（和为1最佳）
                     limit=5,  # 最终返回Top5匹配结果
                     norm_score=True,  # 开启评分归一化，统一评分量级为0-1
-                    output_fields=["item_name"]  # 指定返回Milvus中存储的商品名字段（业务字段）
+                    output_fields=["item_name", "kb_id", "document_id"]  # 指定返回Milvus中存储的商品名字段（业务字段）
                 )
 
                 # 初始化当前商品名的匹配结果列表，存储匹配到的商品名+对应相似度评分
@@ -236,7 +238,7 @@ class NodeItemNameConfirm(NodeBase):
                 # 校验搜索结果是否有效（非空且包含数据，适配Milvus批量搜索格式）
                 if search_res and len(search_res) > 0:
                     # 遍历当前商品名的Top5匹配结果（search_res[0]为该商品的独立搜索结果集）
-                    for hit in search_res[0]:
+                    for hit in check_local_docs(search_res[0], kb_id, hits=True):
                         # 提取匹配结果中的商品名和评分，做防KeyError处理（设置默认空字典）
                         # hit格式：{"id": 数据库ID, "distance": 相似度评分, "entity": {"item_name": "标准化商品名"}}
                         matches.append(
@@ -254,7 +256,8 @@ class NodeItemNameConfirm(NodeBase):
 
             # 捕获单个商品名处理的异常（不中断其他商品名执行），仅记录错误日志
             except Exception as e:
-                logger.error(f"查询商品名 '{item_names[i]}' 时出错: {e}")
+                logger.error("商品范围检索失败")
+                raise
 
         # 返回所有商品名的向量化+搜索结果列表
         return results
@@ -279,7 +282,7 @@ class NodeItemNameConfirm(NodeBase):
         # 2、初始化候选商品名列表（低置信度，需用户确认的商品名）
         options: List[str] = []
 
-        logger.info(f"步骤6：获得待处理的数据源：{query_results}")
+        logger.info("正在对齐本知识库产品")
 
         for res in query_results:
             # 提取原始的数据，商品名和匹配结果
@@ -363,7 +366,7 @@ class NodeItemNameConfirm(NodeBase):
 
             # 若存在需更新的消息ID，批量更新历史消息的商品名关联
             if ids_to_update:
-                update_message_item_names(ids_to_update, confirmed)
+                update_message_item_names(ids_to_update, confirmed, user_id=state["user_id"], kb_id=state["kb_id"], session_id=state["session_id"])
 
             # 更新会话状态：设置确认商品名、改写后的查询
             state["item_names"] = confirmed
@@ -397,18 +400,10 @@ class NodeItemNameConfirm(NodeBase):
          :param message_id: 字符串 - 本次用户问题的消息唯一ID
          :return:
          """
-        # 若会话状态中有助手答案（分支B/C），写入助手消息到历史
-        if state.get("answer"):
-            save_chat_message(
-                session_id=session_id,  # 会话ID，关联所属会话
-                role="assistant",  # 消息角色：助手
-                text=state["answer"],  # 消息内容：向用户确认的提示语/无结果提示语
-                rewritten_query="",  # 助手消息无需改写查询，设为空
-                item_names=state.get("item_names", [])  # 关联的商品名列表（分支B/C均为空）
-            )
-
+        # 助手答案统一由答案输出节点写入，避免澄清消息重复。
         # 强制更新本次用户原始问题的关联信息（核心：补充改写查询、商品名）
         save_chat_message(
+            user_id=state["user_id"], kb_id=state["kb_id"],
             session_id=session_id,  # 会话ID，关联所属会话
             role="user",  # 消息角色：用户
             text=state["original_query"],  # 消息内容：用户原始查询

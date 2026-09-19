@@ -1,4 +1,5 @@
 import re
+from utils.knowledge_access import require_kb_permission, check_local_docs
 from typing import List, Dict, Tuple
 
 from processor.query_processor.prompt.answer_prompt import ANSWER_PROMPT
@@ -11,6 +12,7 @@ from utils.mongo_history_utils import save_chat_message
 from utils.sse_utils import push_to_session, SSEEvent
 from utils.task_utils import set_task_result, add_task_warning
 from utils.answer_presentation import present_answer, history_text
+from utils.asset_references import sanitize_sources
 
 MAX_CONTEXT_CHARS = 12000
 
@@ -52,7 +54,10 @@ class NodeAnswerOutput(NodeBase):
             self._step_3_generate_response(state, prompt)
 
 
-        presentation = present_answer(state.get("answer"), state.get("sources") or [])
+        require_kb_permission(state["user_id"], state["kb_id"])
+        check_local_docs(state.get("sources") or [], state["kb_id"])
+        # 最终答案只携带与本知识库、来源文档匹配的私有图片，避免透传旧公开地址。
+        presentation = present_answer(state.get("answer"), sanitize_sources(state.get("sources") or [], state["kb_id"]))
         state.update(presentation)
         image_urls = presentation["image_urls"]
 
@@ -91,6 +96,10 @@ class NodeAnswerOutput(NodeBase):
         阶段二：构建 Prompt
         根据state中的问题、重新问题、历史对话、提问商品（item_names）、 重排内容 组装 LLM 提示词
         """
+        require_kb_permission(state["user_id"], state["kb_id"])
+        check_local_docs(state.get("reranked_docs") or [], state["kb_id"])
+        # 构造模型上下文前清理无合法归属的图片引用，来源正文使用清理后的副本。
+        state["reranked_docs"] = sanitize_sources(state.get("reranked_docs") or [], state["kb_id"])
         char_budget = MAX_CONTEXT_CHARS
 
         # 1. 获取问题和商品名
@@ -120,7 +129,7 @@ class NodeAnswerOutput(NodeBase):
             item_names=item_names_str,
             question=question,
         )
-        logger.info(f"组装后的提示词为：{prompt}")
+        logger.info("答案提示词已准备")
         return prompt
 
 
@@ -167,7 +176,7 @@ class NodeAnswerOutput(NodeBase):
             used_chars += len(doc_entry) + 2
             if included_docs is not None:
                 included_docs.append({
-                    **{key: doc.get(key) for key in ("title", "source", "url", "chunk_id", "score", "content")},
+                    **{key: doc.get(key) for key in ("title", "source", "url", "chunk_id", "score", "content", "kb_id", "document_id")},
                     "source_id": str(idx),
                 })
 
@@ -327,9 +336,11 @@ class NodeAnswerOutput(NodeBase):
         answer = (state.get("answer") or "").strip()
         item_names = state.get("item_names") or []
 
+        require_kb_permission(state["user_id"], state["kb_id"])
         try:
             if answer:
                 save_chat_message(
+                    user_id=state["user_id"], kb_id=state["kb_id"],
                     session_id=session_id,
                     role="assistant",
                     text=answer,

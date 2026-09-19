@@ -558,3 +558,6 @@ dialog p {
         transition: none!important;
     }
 }
+
+/* 身份确认前隐藏私有内容，并设置账号操作入口和修改密码弹窗。 */
+.auth-pending .workspace,.auth-pending .sidebar{visibility:hidden}.account-actions{margin-left:auto;display:flex;gap:16px}#password-form label{display:grid;gap:8px;margin:16px 0}#password-form input{padding:10px;border:1px solid #cedbd4;border-radius:8px;font:inherit}#password-error{color:#b13b37}

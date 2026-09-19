@@ -11,6 +11,8 @@ function fixture() {
   const requests = [];
   const messages = [];
   const context = {
+    state:{},
+    authReady:{then:fn=>fn(true)},
     $: selector => {
       if (!elements.has(selector)) elements.set(selector, {
         open:false,innerHTML:'',textContent:'',hidden:false,listeners:{},
@@ -19,7 +21,7 @@ function fixture() {
       });
       return elements.get(selector);
     },
-    api: () => new Promise((resolve,reject) => requests.push({resolve,reject})),
+    api: (path,options) => new Promise((resolve,reject) => requests.push({path,options,resolve,reject})),
     window:{addEventListener:(name,fn)=>listeners[name]=fn,dispatchEvent(){}},
     CustomEvent:class {constructor(type,options){this.type=type;this.detail=options.detail;}},
     AbortSignal:{timeout:()=>({})},setTimeout:()=>1,clearTimeout(){},
@@ -55,11 +57,32 @@ const settle = () => new Promise(resolve=>setImmediate(resolve));
   await poll;
   assert.equal(f.dialog.open,true,'查询失败不代表任务结束');
   assert.equal(f.context.$('#import-status-error').hidden,false);
+  // 终止当前批次只调用取消任务接口，不退出账号。
+  const cancel = f.context.cancelImport();
+  const cancelRequest = f.requests.shift();
+  assert.equal(cancelRequest.path,'/tasks/b/cancel');
+  assert.equal(cancelRequest.options.method,'POST');
+  assert.equal(f.context.$('#import-cancel').disabled,true);
+  cancelRequest.resolve({status:'canceling'});
+  await cancel;
+  f.requests.shift().resolve({items:[task('a','completed'),task('b','canceling')]});
+  await settle();
+  assert.equal(f.dialog.open,true,'后台清理完成前继续等待');
+  assert.equal(f.context.$('#import-cancel').disabled,true);
   poll = f.context.refreshImportTasks();
-  f.requests.shift().resolve({items:[task('a','completed'),task('b','failed')]});
+  f.requests.shift().resolve({items:[task('a','completed'),task('b','canceled')]});
   await poll;
-  assert.equal(f.dialog.open,false,'全部结束后恢复，失败也不能永久锁住界面');
-  assert.match(f.messages.at(-1),/1 份文档失败/);
+  assert.equal(f.dialog.open,false);
+  assert.match(f.messages.at(-1),/已终止 1 份导入/);
+  // 独立批次继续验证失败提示，终止提示不会覆盖不同批次的结果。
+  const failedFixture = fixture();
+  failedFixture.requests.shift().resolve({items:[task('c','processing')]});
+  await settle();
+  poll = failedFixture.context.refreshImportTasks();
+  failedFixture.requests.shift().resolve({items:[task('c','failed')]});
+  await poll;
+  assert.equal(failedFixture.dialog.open,false,'全部结束后恢复，失败也不能永久锁住界面');
+  assert.match(failedFixture.messages.at(-1),/1 份文档失败/);
 
   // 旧轮询即使晚返回，也不能覆盖上传响应中新创建的任务。
   poll = f.context.refreshImportTasks();
@@ -82,7 +105,7 @@ const settle = () => new Promise(resolve=>setImmediate(resolve));
 
   // 从浏览器往返缓存恢复时重新确认状态，避免使用离开前的空闲状态。
   f.listeners.pagehide();
-  f.listeners.pageshow({persisted:true});
+  f.listeners['zhiku:restore']();
   assert.equal(f.dialog.open,true);
   f.requests.shift().resolve({items:[]});
   await settle();
@@ -94,5 +117,34 @@ const settle = () => new Promise(resolve=>setImmediate(resolve));
   f.requests.shift().resolve({items:[]});
   await settle();
   assert.equal(f.dialog.open,false);
+  // 传输阶段取消：先通知后端，再断开连接；等待确认，不能直接关闭弹窗。
+  f.context.beginImportUpload();
+  let aborted=false;
+  f.context.state.uploadId='upload-1';
+  f.context.state.uploadXHR={abort(){aborted=true;f.context.finishImportUpload();}};
+  const cancelUpload=f.context.cancelImport();
+  const uploadRequest=f.requests.shift();
+  assert.equal(uploadRequest.path,'/uploads/upload-1/cancel');
+  assert.equal(aborted,false);
+  uploadRequest.resolve({});
+  await cancelUpload;
+  assert.equal(aborted,true);
+  assert.equal(f.dialog.open,true);
+  while(f.requests.length)f.requests.shift().resolve({items:[]});
+  await settle();
+  assert.equal(f.dialog.open,false);
+
+  // 终止接口失败时保留任务及错误反馈，允许再次终止。
+  poll=f.context.refreshImportTasks();
+  f.requests.shift().resolve({items:[task('retry','processing')]});
+  await poll;
+  const retry=f.context.cancelImport();
+  f.requests.shift().reject(new Error('网络中断'));
+  await retry;
+  f.requests.shift().resolve({items:[task('retry','processing')]});
+  await settle();
+  assert.equal(f.dialog.open,true);
+  assert.match(f.messages.at(-1),/终止失败/);
+  assert.equal(f.context.$('#import-cancel').disabled,false);
   console.log('导入状态测试通过：进度锁定、批次完成/失败、断线恢复、旧请求隔离、上传失败恢复。');
 })().catch(error=>{console.error(error);process.exitCode=1;});

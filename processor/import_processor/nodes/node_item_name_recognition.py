@@ -1,4 +1,5 @@
 # processor/import_processor/nodes/node_item_name_recognition.py
+from utils.knowledge_access import kb_filter
 import json
 from typing import List, Tuple, Dict
 from langchain_core.messages import SystemMessage, HumanMessage
@@ -10,7 +11,7 @@ from config.import_config import import_config
 from processor.import_processor.base import BaseNode
 from processor.import_processor.state import ImportGraphState
 from utils.embedding_utils import generate_embeddings
-from utils.milvus_utils import get_milvus_client, escape_milvus_string
+from utils.milvus_utils import get_milvus_client, escape_milvus_string, validate_private_schema
 from tool.logger import logger
 
 class NodeItemNameRecognition(BaseNode):
@@ -58,7 +59,7 @@ class NodeItemNameRecognition(BaseNode):
 
 
         # 打印识别结果
-        logger.info(f"--- 识别完成: {item_name} ---")
+        logger.info("产品主体识别完成")
 
         return state
 
@@ -267,6 +268,10 @@ class NodeItemNameRecognition(BaseNode):
             auto_id=True
         )
         # 添加文件标题字段（VARCHAR类型，最大长度65535）
+        # 产品索引与正文切片使用相同的知识库、文档和版本范围。
+        schema.add_field(field_name="import_task", datatype=DataType.VARCHAR, max_length=36)
+        schema.add_field(field_name="kb_id", datatype=DataType.VARCHAR, max_length=36)
+        schema.add_field(field_name="document_id", datatype=DataType.VARCHAR, max_length=36)
         schema.add_field(
             field_name="file_title",
             datatype=DataType.VARCHAR,
@@ -351,8 +356,7 @@ class NodeItemNameRecognition(BaseNode):
             # milvus_client = MilvusClient(uri=milvus_uri)
             milvus_client = get_milvus_client()
             if not milvus_client:
-                logger.warning("无法获取 Milvus 客户端（连接失败），跳过数据保存")
-                return
+                raise RuntimeError("Milvus 不可用")
 
             # 2. 创建集合（如果不存在）
             collection_name = milvus_config.item_name_collection  # 集合名称
@@ -363,12 +367,13 @@ class NodeItemNameRecognition(BaseNode):
             # 转义商品名称（防止特殊字符导致filter解析失败）
             safe_item_name = escape_milvus_string(item_name)
             # 构建过滤表达式：item_name等于目标值
-            filter_expr = f'item_name=="{safe_item_name}"'
+            filter_expr = kb_filter(state["kb_id"], document_id=state["document_id"])
             # 删除符合条件的数据
-            milvus_client.delete(collection_name=collection_name, filter=filter_expr)
+            validate_private_schema(milvus_client, collection_name)
 
             # 4. 准备插入Milvus的数据
             data = {
+                "kb_id": state["kb_id"], "document_id": state["document_id"], "import_task": state["task_id"],
                 "file_title": file_title,  # 文件标题
                 "item_name": item_name  # 商品名称
             }

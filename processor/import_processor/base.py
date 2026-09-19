@@ -8,7 +8,8 @@
 from abc import abstractmethod, ABC
 from typing import TypeVar
 from tool.logger import logger
-from utils.task_utils import add_running_task, add_done_task
+from utils.knowledge_access import require_kb_permission
+from utils.task_utils import add_running_task, add_done_task, is_task_canceled, TaskCanceled
 
 T = TypeVar("T")  # 泛型状态类型
 class BaseNode(ABC):
@@ -20,12 +21,20 @@ class BaseNode(ABC):
         节点执行入口
         """
         try:
+            # 排队期间的取消在节点开始前生效，避免启动新的解析或模型调用。
+            if state.get("task_id") and is_task_canceled(state["task_id"]):
+                raise TaskCanceled()
+            # 每个节点执行前重新校验上传权限，排队期间账号或权限变化也会生效。
+            require_kb_permission(state["user_id"], state["kb_id"], 'upload')
             # 1. 开始准备执行节点
             logger.info(f"--- {self.name} 开始啦 ---")
             add_running_task(state.get("task_id"), self.name)
 
             # 2. 执行节点
             result = self.process(state)
+            # 外部调用期间无法强行停止线程，返回后再检查，防止结果进入后续节点。
+            if state.get("task_id") and is_task_canceled(state["task_id"]):
+                raise TaskCanceled()
 
             # 3. 执行节点成功
             logger.info(f"--- {self.name} 完成啦 ---")

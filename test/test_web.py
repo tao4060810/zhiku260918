@@ -12,6 +12,8 @@ from fastapi.testclient import TestClient
 from utils import task_utils as tasks
 from utils.sse_utils import push_to_session
 from web.app import app
+from support import DatabaseCase
+from pymongo.errors import ConnectionFailure
 
 
 def fake_query(task_id, session_id, query, is_stream):
@@ -25,16 +27,13 @@ def fake_query(task_id, session_id, query, is_stream):
     push_to_session(task_id, "final", {"answer": "测试答案", "sources": []})
 
 
-class WebTests(unittest.TestCase):
+class WebTests(DatabaseCase):
     def setUp(self):
-        with tasks._lock:
-            tasks._tasks.clear()
-        self.temp = tempfile.TemporaryDirectory()
-        self.addCleanup(self.temp.cleanup)
-        self.root_patch = patch("web.api.import_service.data_root", return_value=Path(self.temp.name))
-        self.root_patch.start()
-        self.addCleanup(self.root_patch.stop)
-        self.client = self.enterContext(TestClient(app))
+        super().setUp()
+        self.user,self.kb=self.account();self.login()
+        self.temp=SimpleNamespace(name=str(self.root))
+        self.chat(self.user,self.kb,'test');self.chat(self.user,self.kb,'busy')
+        self.client.params={'kb_id':self.kb['_id']}
 
     def test_pages_and_assets(self):
         paths = ["/", "/chat.html", "/import.html", "/static/assets/brand.png", "/docs"]
@@ -63,6 +62,8 @@ class WebTests(unittest.TestCase):
                 self.assertIn(f'href="/{view}.html" aria-current="page"', html)
                 self.assertIn('id="confirm-dialog"', html)
                 self.assertIn('id="import-status-dialog"', html)
+                self.assertIn('id="import-cancel"', html)
+                self.assertIn('id="logout"', html)
                 self.assertIn('/static/js/import-status.js', html)
                 self.assertEqual('id="source-dialog"' in html, view == "chat")
                 self.assertEqual('/static/vendor/marked.umd.js' in html, view == "chat")
@@ -74,7 +75,7 @@ class WebTests(unittest.TestCase):
 
     @patch("web.api.query_service.run_query_graph", side_effect=fake_query)
     def test_blocking_answer(self, mock_run):
-        result = self.client.post("/query", json={"query":"hello", "is_stream":False})
+        result = self.client.post("/query", json={"kb_id":self.kb["_id"],"query":"hello", "is_stream":False})
         self.assertEqual(result.status_code, 200)
         self.assertEqual(result.json()["answer"], "测试答案")
         self.assertEqual(result.json()["done_list"], ["node_answer_output"])
@@ -82,7 +83,7 @@ class WebTests(unittest.TestCase):
 
     @patch("web.api.query_service.run_query_graph", side_effect=fake_query)
     def test_sse_replay_and_resume(self, _):
-        data = self.client.post("/query", json={"query":"hello"}).json()
+        data = self.client.post("/query", json={"kb_id":self.kb["_id"],"query":"hello"}).json()
         # 等待实际执行器完成任务，确保连接建立前所有事件已写入缓冲区。
         app.state.executor.submit(lambda: None).result(timeout=5)
         url = f'/stream/{data["session_id"]}?task_id={data["task_id"]}'
@@ -97,8 +98,8 @@ class WebTests(unittest.TestCase):
         self.assertEqual(self.client.get('/stream/other?task_id='+data['task_id']).status_code,404)
 
     def test_same_session_rejects_overlap(self):
-        tasks.create_task("query", session_id="busy")
-        response = self.client.post("/query", json={"query":"hello", "session_id":"busy"})
+        tasks.create_task("query", user_id=self.user["_id"],kb_id=self.kb["_id"], session_id="busy")
+        response = self.client.post("/query", json={"kb_id":self.kb["_id"],"query":"hello", "session_id":"busy"})
         self.assertEqual(response.status_code,409)
         self.assertEqual(self.client.delete('/history/busy').status_code,409)
 
@@ -107,7 +108,7 @@ class WebTests(unittest.TestCase):
             tasks.update_task_status(task_id, "failed", error="模型离线")
             push_to_session(task_id, "error", {"error":"模型离线"})
         with patch("web.api.query_service.run_query_graph", side_effect=fail):
-            response=self.client.post('/query',json={"query":"test","is_stream":False})
+            response=self.client.post('/query',json={"kb_id":self.kb["_id"],"query":"test","is_stream":False})
         self.assertEqual(response.status_code,503)
 
     def test_invalid_uploads(self):
@@ -151,26 +152,26 @@ class WebTests(unittest.TestCase):
         self.assertTrue(all(task['status'] == 'failed' for task in tasks.list_tasks()))
 
     def test_history_returns_images_and_sources(self):
-        records=[{'_id':123,'role':'assistant','text':'ok[cite:1]','image_urls':['https://example.com/image.png'],'sources':[{'title':'Manual','source_id':'1','source':'local','content':'![diagram](https://example.com/image.png)'}]}]
+        records=[{'_id':123,'role':'assistant','text':'ok[cite:1]','image_urls':['/assets/00000000-0000-0000-0000-000000000001'],'sources':[{'title':'Manual','source_id':'1','source':'local','content':'![diagram](/assets/00000000-0000-0000-0000-000000000001)'}]}]
         with patch('web.api.query_service.history_store.get_recent_messages',return_value=records):
             data=self.client.get('/history/test').json()
         self.assertEqual(data['items'][0]['_id'],'123')
         self.assertEqual(data['items'][0]['sources'][0]['title'],'Manual')
-        self.assertEqual(data['items'][0]['image_urls'],['https://example.com/image.png'])
+        self.assertEqual(data['items'][0]['image_urls'],['/assets/00000000-0000-0000-0000-000000000001'])
 
     def test_database_error_is_not_empty_success(self):
-        with patch('web.api.query_service.history_store.get_recent_messages',side_effect=RuntimeError()):
+        with patch('web.api.query_service.history_store.get_recent_messages',side_effect=ConnectionFailure()):
             self.assertEqual(self.client.get('/history/test').status_code,503)
-        with patch('web.api.query_service.history_store.clear_history',side_effect=RuntimeError()):
+        with patch('web.api.query_service.history_store.clear_history',side_effect=ConnectionFailure()):
             self.assertEqual(self.client.delete('/history/test').status_code,503)
 
     def test_missing_task_and_invalid_cursor(self):
         self.assertEqual(self.client.get('/status/missing').status_code,404)
-        task=tasks.create_task('query',session_id='test')
+        task=tasks.create_task('query',user_id=self.user['_id'],kb_id=self.kb['_id'],session_id='test')
         self.assertEqual(self.client.get('/stream/test?task_id='+task,headers={'Last-Event-ID':'bad'}).status_code,400)
 
 
-class RegressionTests(unittest.TestCase):
+class RegressionTests(DatabaseCase):
     def test_markdown_entry_reads_file(self):
         from processor.import_processor.nodes.node_entry import NodeEntry
         with tempfile.TemporaryDirectory() as folder:
@@ -184,8 +185,8 @@ class RegressionTests(unittest.TestCase):
         cursor=unittest.mock.MagicMock()
         cursor.sort.return_value.limit.return_value=[{'text':'newest'},{'text':'previous'}]
         tool=SimpleNamespace(chat_message=SimpleNamespace(find=lambda query:cursor))
-        with patch('utils.mongo_history_utils.get_history_mongo_tool',return_value=tool):
-            result=get_recent_messages('test',2)
+        with patch('utils.mongo_history_utils.get_db',return_value=tool), patch('utils.mongo_history_utils.require_chat'):
+            result=get_recent_messages('test',2,user_id='a',kb_id='k')
         self.assertEqual([r['text'] for r in result],['previous','newest'])
         cursor.sort.assert_called_once_with([('ts',-1),('_id',-1)])
 
@@ -208,7 +209,8 @@ class RegressionTests(unittest.TestCase):
         with ExitStack() as stack:
             for name, fn in replacements.items():
                 stack.enter_context(patch.object(getattr(workflow,name),'process',side_effect=fn))
-            result=workflow.run({'session_id':'test','original_query':'test'})
+            stack.enter_context(patch('processor.query_processor.base.require_kb_permission'))
+            result=workflow.run({'session_id':'test','original_query':'test','user_id':'a','kb_id':'k'})
         self.assertEqual(result['answer'],'ok')
         self.assertEqual(calls,[([1],[2],[3])])
 

@@ -165,7 +165,7 @@ class NodePDFToMD(BaseNode):
                 logger.info(f"【任务轮询】解析任务完成！总耗时{int(elapsed_time)}s，bactch_id：{batch_id}")
 
                 full_zip_url = result_item["full_zip_url"]
-                logger.info(f"【任务轮询】返回ZIP包下载链接：{full_zip_url}，bactch_id：{batch_id}")
+                logger.info("解析结果已就绪")
 
                 return full_zip_url
 
@@ -188,7 +188,7 @@ class NodePDFToMD(BaseNode):
        """
 
         # 1、下载ZIP包
-        logger.info(f"【ZIP下载】开始下载ZIP包：{zip_url} ...")
+        logger.info("开始下载解析结果")
         response = requests.get(zip_url, timeout=(10, 120))
 
         # 对响应结果进行校验

@@ -8,6 +8,7 @@
 from abc import abstractmethod, ABC
 from typing import TypeVar
 from tool.logger import logger
+from utils.knowledge_access import require_kb_permission
 from utils.task_utils import add_running_task, add_done_task
 
 T = TypeVar("T")  # 泛型状态类型
@@ -20,6 +21,8 @@ class NodeBase(ABC):
         节点执行入口
         """
         try:
+            # 各检索节点共享服务端传入的身份，执行前再次确认知识库读取权限。
+            require_kb_permission(state["user_id"], state["kb_id"], 'read')
             # 1. 开始准备执行节点
             logger.info(f"--- {self.name} 开始啦 ---")
             add_running_task(state.get("task_id"), self.name)

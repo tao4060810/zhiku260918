@@ -1,9 +1,14 @@
+from web.api.auth_dependencies import CurrentUser
+from utils.knowledge_access import require_kb_permission
+from utils.knowledge_store import mutation_lock, reserve_documents, rollback_documents, finish_document
+from utils.task_utils import TERMINAL, MAX_ACTIVE_TASKS, finish_task, cancel_task, cancel_upload, is_upload_canceled
+from utils.user_store import get_db
 # 文档导入接口：接收并校验文件、提交后台任务，以及提供导入进度查询。
 import os
 import re
 from datetime import datetime
 from pathlib import Path
-from uuid import uuid4
+from uuid import UUID, uuid4
 from fastapi import APIRouter, File, HTTPException, Request, UploadFile
 from utils.task_utils import (
     add_done_task, create_task, get_task, list_tasks, update_task_status,
@@ -44,30 +49,35 @@ def safe_filename(name):
 
 
 @router.post("/upload", status_code=202)
-def upload_files(request: Request, files: list[UploadFile] = File(...)):
+def upload_files(request: Request, user: CurrentUser, kb_id: str, files: list[UploadFile] = File(...), upload_id: UUID | None = None):
     """
-    批量上传文档，校验通过后提交后台导入任务
-    :param request: 请求对象，用于获取应用共享的后台线程池
+    校验私有知识库权限，保存整批文件并提交后台导入
+    :param request: 当前 HTTP 请求，用于读取 Cookie、请求头或应用资源
+    :param user: 通过认证依赖取得的当前用户记录
+    :param kb_id: 本次操作所属的知识库 ID
     :param files: 表单中名为 files 的上传文件列表
-    :return: 接收提示及任务 ID 列表；HTTP 202 表示已接收，不代表入库完成
+    :param upload_id: 可选的客户端批次 UUID，用于在上传响应返回前关联取消请求
+    :return: HTTP 202 响应中的任务 ID 列表，不代表解析入库已完成
     """
-    # 1. 校验本批文件数量和文件名
-    if not 1 <= len(files) <= MAX_FILES:
-        raise HTTPException(400, "每次请选择 1 至 10 个文件。")
-    names = [safe_filename(f.filename) for f in files]
-    staged = []  # 本批已写入磁盘的文件，失败时用于清理。
-    task_ids = []  # 本批已创建的任务，整批准备成功后才提交到线程池。
+    # 1. 从认证依赖取得用户身份，校验其对目标知识库的上传权限
+    require_kb_permission(user["_id"], kb_id, "upload")
+    upload_id = str(upload_id) if upload_id else None
+    staged, task_ids, reservations = [], [], []
     try:
-        # 2. 保存并校验整批文件，避免部分文件无效时仍启动导入
+        # 取消请求可能先到达；此时直接拒绝本批文件，不预留文档或创建任务。
+        if is_upload_canceled(user["_id"], upload_id):
+            raise HTTPException(409, "上传已终止。")
+        if not 1 <= len(files) <= MAX_FILES:
+            raise HTTPException(400, "每次请选择 1 至 10 个文件。")
+        names = [safe_filename(f.filename) for f in files]
+        # 2. 整批文件先保存到知识库的独立暂存目录，逐份检查大小及内容格式
         for upload, name in zip(files, names):
-            # 每份文件使用独立目录，避免不同上传请求中的同名文件相互覆盖。
-            folder = data_root() / datetime.now().strftime("%Y%m%d") / str(uuid4())
+            folder = data_root() / kb_id / "staging" / str(uuid4())
             folder.mkdir(parents=True, exist_ok=False)
             path = folder / name
             staged.append(path)
             size = 0
             with path.open("wb") as target:
-                # 每次读取 1 MB，并累计检查大小，避免将整个上传文件一次读入内存。
                 while chunk := upload.file.read(1024 * 1024):
                     size += len(chunk)
                     if size > MAX_FILE_BYTES:
@@ -76,61 +86,120 @@ def upload_files(request: Request, files: list[UploadFile] = File(...)):
             if not size:
                 raise HTTPException(400, "不能上传空文件。")
             if path.suffix.lower() == ".md":
-                # UTF-8-SIG 同时兼容带 BOM 和不带 BOM 的 UTF-8 文本。
                 try:
                     if not path.read_text(encoding="utf-8-sig").strip():
                         raise HTTPException(400, "Markdown 文件内容为空。")
                 except UnicodeDecodeError:
                     raise HTTPException(400, "Markdown 文件需要使用 UTF-8 编码。") from None
             else:
-                # 检查文件头中的 PDF 标记，完整解析由后续工作流完成。
                 with path.open("rb") as source:
                     if b"%PDF-" not in source.read(1024):
                         raise HTTPException(400, "文件内容不是有效的 PDF。")
-        # 3. 为校验通过的文件分别创建任务，标记上传步骤完成
-        for path in staged:
-            # 只将创建任务时的校验异常转换为冲突提示，文件处理异常仍由原流程处理。
+        # 3. 在同一把锁内检查整批容量、预留文档并创建任务，准备完成后才提交后台
+        with mutation_lock:
             try:
-                task_id = create_task("import", filename=path.name)
-            except ValueError as exc:
-                raise HTTPException(409, str(exc)) from None
-            task_ids.append(task_id)
-            add_done_task(task_id, "upload_file")
-    except Exception:
-        # 准备阶段失败时回滚整批：标记已创建任务失败，并清理本次保存的文件。
-        for task_id in task_ids:
-            update_task_status(task_id, "failed", error="批量上传未完成，请重试。")
+                # 暂存文件期间也可能收到取消；在创建任务的同一把锁内再次检查。
+                if is_upload_canceled(user["_id"], upload_id):
+                    raise HTTPException(409, "上传已终止。")
+                active = [t for t in list_tasks() if t["status"] not in TERMINAL]
+                own = [t for t in active if t["user_id"] == user["_id"] and t["kind"] == "import"]
+                if len(active) + len(files) > MAX_ACTIVE_TASKS or len(own) + len(files) > 10:
+                    raise ValueError("任务队列已满，请稍后再试。")
+                reservations = reserve_documents(user["_id"], kb_id, [(p.name, p.stat().st_size) for p in staged])
+                for i, (entry, path) in enumerate(zip(reservations, staged)):
+                    task_id = create_task("import", user_id=user["_id"], kb_id=kb_id, filename=path.name,
+                                          document_id=entry["document_id"], size_bytes=entry["size"], upload_id=upload_id)
+                    task_ids.append(task_id)
+                    # 路径包含知识库、文档和任务 ID，使每次导入的本地产物互相隔离。
+                    target = data_root() / kb_id / entry["document_id"] / task_id / path.name
+                    target.parent.mkdir(parents=True, exist_ok=False)
+                    path.replace(target)
+                    path.parent.rmdir()
+                    staged[i] = target
+                    get_db().documents.update_one({"_id": entry["document_id"], "kb_id": kb_id},
+                                                  {"$set": {"pending_task": task_id}})
+                    add_done_task(task_id, "upload_file")
+            except Exception:
+                # 任务创建失败时恢复整批文档原记录，已创建任务统一标记失败。
+                for task_id in task_ids:
+                    finish_task(task_id, error="批量上传未完成，请重试。")
+                rollback_documents(kb_id, reservations)
+                raise
+    except Exception as exc:
+        # 清理本批保存的文件，将配额或任务冲突转换为前端可读的 HTTP 409。
         for path in staged:
             path.unlink(missing_ok=True)
-            path.parent.rmdir()
+            if path.parent.exists():
+                path.parent.rmdir()
+        if isinstance(exc, ValueError):
+            raise HTTPException(409, str(exc)) from None
         raise
     finally:
-        # 无论准备阶段成功还是失败，都释放上传文件的读取资源。
         for upload in files:
             upload.file.close()
-    # 4. 提交后台导入任务并返回任务 ID，前端据此查询进度
+    # 4. 提交后台任务；线程池已关闭时释放预留，避免文档永久停留在处理中
     for task_id, path in zip(task_ids, staged):
-        request.app.state.executor.submit(run_import_graph, task_id, path)
+        try:
+            request.app.state.executor.submit(run_import_graph, task_id, path)
+        except RuntimeError:
+            finish_document(get_task(task_id), False)
+            finish_task(task_id, error="服务正在关闭，导入未开始。")
     return {"code": 200, "message": "文件已接收", "task_ids": task_ids}
 
 
 @router.get("/status/{task_id}")
-def get_task_progress(task_id: str):
+def get_task_progress(task_id: str, user: CurrentUser):
     """
-    查询单个任务的进度，支持导入和问答任务
-    :param task_id: 要查询的任务 ID
-    :return: 任务状态、节点进度、错误信息及处理结果
+    查询当前用户拥有的任务，拒绝访问其他用户的任务
+    :param task_id: 后台任务 ID
+    :param user: 通过认证依赖取得的当前用户记录
+    :return: 任务状态、节点进度、错误及处理结果
     """
     task = get_task(task_id)
-    if task is None:
+    if not task or task["user_id"] != user["_id"]:
         raise HTTPException(404, "任务不存在或已过期。")
+    require_kb_permission(user["_id"], task["kb_id"])
     return {"code": 200, **task}
 
 
+@router.post("/uploads/{upload_id}/cancel", status_code=204)
+def cancel_upload_batch(upload_id: UUID, user: CurrentUser):
+    """
+    取消当前用户的上传批次，允许取消时后台尚未创建任务
+    :param upload_id: 与上传请求相同的批次 UUID
+    :param user: 通过认证依赖取得的当前用户记录，写请求同时校验 CSRF
+    :return: HTTP 204 表示已记录取消，不表示正在运行的任务已完成清理
+    """
+    try:
+        cancel_upload(user["_id"], str(upload_id))
+    except ValueError as exc:
+        raise HTTPException(429, str(exc)) from None
+
+
+@router.post("/tasks/{task_id}/cancel")
+def cancel_import_task(task_id: str, user: CurrentUser):
+    """
+    请求终止本人有上传权限的导入任务，不撤销已完成的文件
+    :param task_id: 要终止的导入任务 ID，不接受问答任务
+    :param user: 通过认证依赖取得的当前用户记录
+    :return: 当前任务状态；取消请求被接受后由后台收尾并进入 canceled
+    """
+    task = get_task(task_id)
+    if not task or task["user_id"] != user["_id"] or task["kind"] != "import":
+        raise HTTPException(404, "任务不存在或已过期。")
+    require_kb_permission(user["_id"], task["kb_id"], "upload")
+    return {"code": 200, **(cancel_task(task_id) or task)}
+
+
 @router.get("/tasks")
-def get_import_tasks():
+def get_import_tasks(user: CurrentUser, kb_id: str | None = None):
     """
-    查询当前进程保留的导入任务，供文档列表和导入进度弹窗展示
-    :return: 包含导入任务列表的字典，按创建顺序从新到旧排列
+    查询当前用户的导入任务，可按知识库进一步筛选
+    :param user: 通过认证依赖取得的当前用户记录
+    :param kb_id: 可选的知识库 ID，指定时额外校验知识库权限
+    :return: 按创建顺序从新到旧排列的任务列表
     """
-    return {"items": list_tasks("import")}
+    if kb_id:
+        require_kb_permission(user["_id"], kb_id)
+    items = list_tasks("import", user_id=user["_id"])
+    return {"items": [t for t in items if kb_id is None or t["kb_id"] == kb_id]}
