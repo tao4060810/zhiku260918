@@ -1,10 +1,10 @@
 {% extends "base.html" %}
 {# 聊天页仅加载 Markdown 处理、消息展示和问答交互所需资源。 #}
-{% block styles %}<link rel="stylesheet" href="/static/css/chat.css">{% endblock %}
+{% block styles %}<link rel="stylesheet" href="/static/css/chat.css?v=20260919-inline">{% endblock %}
 {% block scripts %}
     <script src="/static/vendor/marked.umd.js" defer></script>
     <script src="/static/vendor/purify.min.js" defer></script>
-    <script src="/static/js/chat.js" defer></script>
+    <script src="/static/js/chat.js?v=20260919-inline" defer></script>
 {% endblock %}
 {% block content %}
     <main id="chat-view" class="chat-view">

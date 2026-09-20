@@ -139,6 +139,7 @@ class NodeSearchEmbeddingHyde(NodeBase):
                 reqs=reqs,
                 ranker_weights=(0.8, 0.2),
                 output_fields=["chunk_id", "content", "item_name", "title", "file_title", "kb_id", "document_id"],
+                limit=10
             )
 
             return check_local_docs(res[0] if res else [], kb_id, hits=True)

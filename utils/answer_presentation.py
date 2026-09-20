@@ -1,7 +1,6 @@
 """规范答案引用格式，不修改已保存的旧版会话原文。"""
 
 import re
-from urllib.parse import urlsplit
 
 
 CITATION = re.compile(r"\[cite:(\d+)\]")
@@ -10,6 +9,7 @@ CODE = re.compile(r"(```[\s\S]*?```|~~~[\s\S]*?~~~|`[^`\n]+`)")
 MARKDOWN_IMAGE = re.compile(r"!\[[^\]]*\]\(([^\s)]+)(?:\s+\"[^\"]*\")?\)")
 # 图片展示仅接受受保护的资产路径；具体归属由来源清理及资产下载接口再检查。
 PRIVATE_IMAGE = re.compile(r"/assets/[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}")
+HTML_IMAGE = re.compile(r"<img\b[^>]*>", re.I)
 
 
 def _map_prose(text, transform):
@@ -35,18 +35,30 @@ def document_images(docs):
 
 
 def present_answer(text, sources, selected_images=None):
-    """仅解析实际引用且可用的资料，并通过白名单校验所选图片。"""
+    """校验图文正文，保留合法图片的位置，并兼容旧版底部图片附件。"""
     text = clean_legacy_text(text or "")
-    image_choices = list(selected_images or [])
+    allowed_images = set(document_images(sources or []))
+    image_choices = []
+    inline_images = set()
 
-    def strip_images(part):
+    def keep_image(match):
+        url = match[1]
+        if url not in allowed_images or url in inline_images:
+            return ""
+        inline_images.add(url)
+        image_choices.append(url)
+        return match[0]
+
+    def validate_images(part):
+        # 旧版图片区块仍转成附件；新版 Markdown 图片在白名单校验后原位保留。
         if "【图片】" in part:
             part, image_block = part.split("【图片】", 1)
-            image_choices.extend(PRIVATE_IMAGE.findall(image_block))
-        image_choices.extend(MARKDOWN_IMAGE.findall(part))
-        return MARKDOWN_IMAGE.sub("", part)
+            if selected_images is None:
+                image_choices.extend(PRIVATE_IMAGE.findall(image_block))
+        return MARKDOWN_IMAGE.sub(keep_image, HTML_IMAGE.sub("", part))
 
-    text = _map_prose(text, strip_images)
+    text = _map_prose(text, validate_images)
+    image_choices.extend(selected_images or [])
     available = {str(source.get("source_id", i)): source for i, source in enumerate(sources or [], 1)}
     used = []
 
@@ -70,12 +82,19 @@ def present_answer(text, sources, selected_images=None):
 
     text = _map_prose(text, resolve).strip()
     cited = [{**available[source_id], "source_id": source_id} for source_id in used]
-    allowed_images = set(document_images(cited))
+    # 配图独立于正文引用，但仍必须存在于已校验归属的本轮本地资料中。
     images = []
     for url in image_choices:
         if url in allowed_images and url not in images and PRIVATE_IMAGE.fullmatch(url):
             images.append(url)
-    return {"answer": text, "sources": cited, "image_urls": images[:3]}
+    # 保存实际配图的来源；历史回放才有足够信息重新校验图片，且不伪造正文引用。
+    covered = set(document_images(cited))
+    for source_id, source in available.items():
+        supported = set(document_images([source])) & set(images)
+        if supported - covered:
+            cited.append({**source, "source_id": source_id})
+            covered.update(supported)
+    return {"answer": text, "sources": cited, "image_urls": images}
 
 
 def present_history_message(message):
@@ -90,4 +109,5 @@ def present_history_message(message):
 def history_text(text):
     """清理旧引用编号和图片列表，避免被下一轮对话沿用。"""
     text = clean_legacy_text(text or "")
-    return _map_prose(text, lambda part: CITATION.sub("", part.split("【图片】", 1)[0])).strip()
+    return _map_prose(text, lambda part: PRIVATE_IMAGE.sub("", MARKDOWN_IMAGE.sub("",
+        HTML_IMAGE.sub("", CITATION.sub("", part.split("【图片】", 1)[0]))))).strip()

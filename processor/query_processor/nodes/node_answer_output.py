@@ -56,8 +56,10 @@ class NodeAnswerOutput(NodeBase):
 
         require_kb_permission(state["user_id"], state["kb_id"])
         check_local_docs(state.get("sources") or [], state["kb_id"])
-        # 最终答案只携带与本知识库、来源文档匹配的私有图片，避免透传旧公开地址。
-        presentation = present_answer(state.get("answer"), sanitize_sources(state.get("sources") or [], state["kb_id"]))
+        # 模型一次生成图文正文；输出前核验资产归属，合法图片保留在原段落位置。
+        sources = sanitize_sources(state.get("sources") or [], state["kb_id"])
+        presentation = present_answer(state.get("answer"), sources)
+        logger.info(f"答案配图完成：候选资料 {len(sources)} 条，展示图片 {len(presentation['image_urls'])} 张")
         state.update(presentation)
         image_urls = presentation["image_urls"]
 
@@ -103,8 +105,8 @@ class NodeAnswerOutput(NodeBase):
         char_budget = MAX_CONTEXT_CHARS
 
         # 1. 获取问题和商品名
-        # 优先使用重写后的问题
-        question = state.get("rewritten_query") or state.get("original_query", "")
+        # 检索使用改写问题，回答保留用户原始的配图、详略等要求。
+        question = state.get("original_query") or state.get("rewritten_query", "")
         item_names = state.get("item_names") or []
 
         # 2. 格式化上下文文档

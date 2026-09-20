@@ -43,17 +43,79 @@ class AnswerPresentationTests(unittest.TestCase):
         user = {"role": "user", "text": "根据参考内容，解释 [cite:1]"}
         self.assertEqual(present_history_message(user), user)
 
-    def test_only_selected_images_from_cited_local_docs_with_limit(self):
-        # 混合重复图片、外部地址和网络资料图片，验证本地来源白名单及三张上限。
+    def test_only_selected_images_from_local_docs_without_truncating(self):
+        # 混合重复图片、外部地址和网络资料图片，验证白名单、去重及多图完整保留。
         urls = [f"/assets/{uuid4()}" for i in range(5)]
         docs = [{"source": "local", "kb_id":self.kb_id,"document_id":str(uuid4()), "content": "\n".join(f"![diagram]({u})" for u in urls)},
                 {"source": "web", "content": "![web](https://example.com/web.png)"}]
         text = "Steps[cite:1][cite:2]\n【图片】\n" + "\n".join([urls[3], urls[3], "https://evil.test/x.png", "https://example.com/web.png", *urls])
         result = present_answer(text, docs)
         self.assertEqual(result["answer"], "Steps[cite:1][cite:2]")
-        self.assertEqual(result["image_urls"], [urls[3], urls[0], urls[1]])
+        self.assertEqual(result["image_urls"], [urls[3], urls[0], urls[1], urls[2], urls[4]])
         self.assertEqual(present_answer("Steps[cite:1]", docs)["image_urls"], [])
         self.assertEqual(present_answer(text, [])['image_urls'], [])
+
+    def test_uncited_image_source_is_saved_and_survives_history(self):
+        # 正文引用步骤，配图来自另一个片段；回放时保留配图来源但不增加正文引用。
+        url = f"/assets/{uuid4()}"
+        docs = [self.docs[0], {**self.docs[1], "content": f"![连接示意图]({url})"}]
+        result = present_answer("Steps[cite:1]", docs, [url])
+        self.assertEqual(result["answer"], "Steps[cite:1]")
+        self.assertEqual(result["image_urls"], [url])
+        self.assertEqual([s["source_id"] for s in result["sources"]], ["1", "2"])
+        record = {"role": "assistant", "text": result["answer"],
+                  "sources": result["sources"], "image_urls": result["image_urls"]}
+        self.assertEqual(present_history_message(record), record)
+        self.assertEqual(present_answer("Diagram", docs, [url])["image_urls"], [url])
+
+    def test_explicit_selection_overrides_inline_images_and_rejects_unknown_assets(self):
+        url, foreign = f"/assets/{uuid4()}", f"/assets/{uuid4()}"
+        docs = [{**self.docs[0], "content": f"![diagram]({url})"}]
+        text = f"Steps[cite:1]\n【图片】\n{url}"
+        self.assertEqual(present_answer(text, docs, [foreign])["image_urls"], [])
+        self.assertEqual(present_answer(text, docs, [])["image_urls"], [])
+
+    def test_inline_images_keep_position_and_history_without_extra_selection(self):
+        urls = [f"/assets/{uuid4()}" for _ in range(4)]
+        docs = [{**self.docs[0], "content": "\n".join(f"![diagram]({url})" for url in urls)}]
+        text = "\n\n".join(f"Step {i}[cite:1]\n\n![diagram]({url})" for i, url in enumerate(urls)) + "\n\nDone."
+        result = present_answer(text, docs)
+        self.assertEqual(result["answer"], text)
+        self.assertEqual(result["image_urls"], urls)
+        record = {"role": "assistant", "text": text, "sources": result["sources"], "image_urls": urls}
+        self.assertEqual(present_history_message(record), record)
+
+    def test_invalid_and_duplicate_inline_images_are_removed(self):
+        own, foreign = f"/assets/{uuid4()}", f"/assets/{uuid4()}"
+        docs = [{**self.docs[0], "content": f"![diagram]({own})"}]
+        text = (f"Before\n\n![diagram]({own})\n\nAfter\n\n![repeat]({own})"
+                f"\n![foreign]({foreign})\n![remote](https://evil.test/x.png)\n<img src='{foreign}'>")
+        result = present_answer(text, docs)
+        self.assertEqual(result["answer"], f"Before\n\n![diagram]({own})\n\nAfter")
+        self.assertEqual(result["image_urls"], [own])
+        self.assertEqual(len(result["sources"]), 1)
+
+    def test_history_prompt_removes_inline_assets_but_keeps_code_examples(self):
+        url = f"/assets/{uuid4()}"
+        text = f"Before\n![diagram]({url})\nAfter[cite:1] {url}"
+        self.assertEqual(history_text(text), "Before\n\nAfter")
+        code = f"`![example]({url})`"
+        self.assertEqual(present_answer(code, self.docs)["answer"], code)
+        self.assertEqual(present_answer(code, self.docs)["image_urls"], [])
+
+    def test_answer_generation_uses_one_model_call_and_original_question(self):
+        from processor.query_processor.nodes.node_answer_output import NodeAnswerOutput
+        state = {"user_id": self.user_id, "kb_id": self.kb_id, "original_query": "请图文交替说明",
+                 "rewritten_query": "配置方法",
+                 "reranked_docs": self.docs, "is_stream": False}
+        llm = SimpleNamespace(invoke=lambda prompt: SimpleNamespace(content="Steps[cite:1]"))
+        with patch("processor.query_processor.nodes.node_answer_output.get_llm_client", return_value=llm) as client, \
+             patch("processor.query_processor.nodes.node_answer_output.save_chat_message"):
+            result = NodeAnswerOutput().process(state)
+        self.assertEqual(result["answer"], "Steps[cite:1]")
+        self.assertEqual(result["image_urls"], [])
+        self.assertIn("请图文交替说明", result["prompt"])
+        client.assert_called_once_with()
 
     def test_legacy_does_not_show_all_retrieved_images(self):
         record = {"role": "assistant", "text": "Answer（参考内容[1]）", "sources": self.docs, "image_urls": ["https://example.com/unused.png"]}

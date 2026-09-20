@@ -5,9 +5,17 @@ function safeURL(value) {
 }
 // 图片仅允许本站受保护的资产地址；实际知识库权限仍由下载接口校验。
 function safeImageURL(value) {try{const url=new URL(value,location.origin);return url.origin===location.origin && /^\/assets\/[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/.test(url.pathname) && !url.search && !url.hash?url.href:null;}catch{return null;}}
-function markdown(value) {
+function markdown(value, imageURLs = []) {
   if (!window.marked || !window.DOMPurify) return escapeHTML(value).replace(/\n/g,'<br>');
-  return DOMPurify.sanitize(marked.parse(value || '', {breaks:true}), {FORBID_TAGS:['img','style','form','input','button','iframe'],FORBID_ATTR:['style']});
+  const allowed=new Set(imageURLs.map(safeImageURL).filter(Boolean));
+  const renderer=new marked.Renderer();
+  // 在生成 HTML 前校验地址；禁止原始 HTML 绕过白名单触发图片或其他资源加载。
+  renderer.html=({text})=>escapeHTML(text);
+  renderer.image=({href,text})=>{
+    const url=safeImageURL(href);
+    return url && allowed.has(url)?`<img src="${escapeHTML(url)}" alt="${escapeHTML(text || '资料图片')}" loading="lazy" referrerpolicy="no-referrer">`:'';
+  };
+  return DOMPurify.sanitize(marked.parse(value || '', {breaks:true,renderer}), {USE_PROFILES:{html:true},FORBID_TAGS:['style','form','input','button','iframe'],FORBID_ATTR:['style','srcset']});
 }
 function streamText(value) {
   return value.split(/(```[\s\S]*?```|`[^`\n]+`)/).map((part,i)=>i%2?part:part
@@ -16,14 +24,21 @@ function streamText(value) {
     .replace(/[（(]\s*参考(?:内容|资料)?\s*(?:\[\d+\]\s*)+[）)]/g,'')
     .replace(/\[cite:\d+\]/g,'')
     .replace(/!\[[^\]]*\]\([^)]+\)/g,'')
-    .replace(/(?:\[(?:c(?:i(?:t(?:e(?::\d*)?)?)?)?)?|【(?:图(?:片)?)?|[（(]参考[^）)]*|!\[[^\n]*)$/g,'')
+    .replace(/(?:\[(?:c(?:i(?:t(?:e(?::\d*)?)?)?)?)?|【(?:图(?:片)?)?|[（(]参考[^）)]*|!\[[\s\S]*|!)$/g,'')
   ).join('');
 }
 function sourceTitle(source) {return String(source.title || '知识库片段').replace(/^\s*#{1,6}\s*/, '').trim() || '知识库片段';}
 function sourceExcerpt(source) {return String(source.content || '').replace(/!\[[^\]]*\]\([^)]+\)/g,'').replace(/\n{3,}/g,'\n\n').trim();}
-function renderAnswer(article, sources = []) {
+function renderAnswer(article, sources = [], imageURLs = []) {
   article.sources=sources;
-  const body=$('.message-body',article);body.innerHTML=markdown(article.answer);
+  const body=$('.message-body',article);body.innerHTML=markdown(article.answer,imageURLs);
+  // 记录已在正文出现的图片，旧版附件只补充未出现的地址，避免重复展示。
+  article.inlineImages=new Set(Array.from(body.querySelectorAll('img'),image=>image.src));
+  body.querySelectorAll('img').forEach(image=>{
+    image.onload=()=>{if(Math.min(image.naturalWidth,image.naturalHeight)<80 || Math.max(image.naturalWidth,image.naturalHeight)<160)image.remove();};
+    image.onerror=()=>image.remove();
+    if(image.complete && image.naturalWidth)image.onload();
+  });
   const byId=new Map(sources.map((source,index)=>[String(source.source_id),{source,number:index+1}]));
   const walker=document.createTreeWalker(body,NodeFilter.SHOW_TEXT);const nodes=[];
   while(walker.nextNode())if(!walker.currentNode.parentElement.closest('pre,code,a'))nodes.push(walker.currentNode);
@@ -100,14 +115,31 @@ function renderProgress(article, task) {
   icons();
 }
 function renderAttachments(article, data) {
-  renderAnswer(article,data.sources || []);
+  renderAnswer(article,data.sources || [],data.image_urls || []);
   $('.source-details',article)?.remove();$('.image-list',article)?.remove();$('.warning-line',article)?.remove();
   if (data.sources?.length) {
     const details=document.createElement('details');details.className='source-details';
     details.innerHTML=`<summary>查看依据 · ${data.sources.length} 条</summary><div class="source-list">${data.sources.map((source,i)=>`<button type="button" class="source-item" data-source-id="${escapeHTML(source.source_id)}">${icon(source.source==='web'?'globe':'file-text')}<span><strong>${i+1}. ${escapeHTML(sourceTitle(source))}</strong><small>${source.source==='web'?'网络资料':'知识库资料'}</small><span class="source-preview">${escapeHTML(sourceExcerpt(source).slice(0,160))}</span></span>${icon('chevron-right')}</button>`).join('')}</div>`;article.append(details);
   }
-  const urls=[...new Set((data.image_urls || []).map(safeImageURL).filter(Boolean))].slice(0,3);
-  if (urls.length) {const images=document.createElement('div');images.className='image-list';urls.forEach((url,i)=>{const figure=document.createElement('figure');const image=document.createElement('img');image.alt=`资料图片 ${i+1}`;image.loading='lazy';image.referrerPolicy='no-referrer';image.onload=()=>{if(Math.min(image.naturalWidth,image.naturalHeight)<80 || Math.max(image.naturalWidth,image.naturalHeight)<160)figure.remove();};image.onerror=()=>figure.remove();image.src=url;const caption=document.createElement('figcaption');caption.textContent=image.alt;figure.append(image,caption);images.append(figure);});article.append(images);}
+  const urls=[...new Set((data.image_urls || []).map(safeImageURL).filter(url=>url && !article.inlineImages.has(url)))];
+  if (urls.length) {
+    const images=document.createElement('div');images.className='image-list';
+    // 小图或加载失败的图片被移除后，按剩余图片重排编号，避免从“图片 2”开始。
+    const renumber=()=>images.querySelectorAll('figure').forEach((figure,i)=>{
+      figure.querySelector('img').alt=`资料图片 ${i+1}`;
+      figure.querySelector('figcaption').textContent=`资料图片 ${i+1}`;
+    });
+    urls.forEach(url=>{
+      const figure=document.createElement('figure');const image=document.createElement('img');
+      image.loading='lazy';image.referrerPolicy='no-referrer';
+      const remove=()=>{figure.remove();renumber();};
+      image.onload=()=>{if(Math.min(image.naturalWidth,image.naturalHeight)<80 || Math.max(image.naturalWidth,image.naturalHeight)<160)remove();};
+      image.onerror=remove;
+      const caption=document.createElement('figcaption');
+      figure.append(image,caption);images.append(figure);image.src=url;
+    });
+    renumber();article.append(images);
+  }
   if (data.warnings?.length) {const warning=document.createElement('p');warning.className='warning-line';warning.textContent=data.warnings.join(' ');article.append(warning);}
   $$('a',article).forEach(a=>{a.target='_blank';a.rel='noopener noreferrer';});
 }

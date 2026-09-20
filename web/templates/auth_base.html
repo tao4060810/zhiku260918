@@ -1,26 +1,43 @@
 <!doctype html>
 {# 登录和注册共享布局，title 与 mode 由子模板设置，registration 由后端配置传入。 #}
-<html lang="zh-CN"><head>
-  <meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>{{ title }} · 掌柜智库</title>
-  <link rel="icon" href="/static/assets/brand.png"><link rel="stylesheet" href="/static/css/auth.css">
-  <script src="/static/js/auth.js" defer></script>
-</head><body data-auth="{{ mode }}">
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>{{ title }} · 掌柜智库</title>
+    <link rel="icon" href="/static/assets/brand.png">
+    <link rel="stylesheet" href="/static/css/auth.css">
+    <script src="/static/js/auth.js" defer></script>
+</head>
+<body data-auth="{{ mode }}">
 <main class="auth-card">
-  <img class="brand" src="/static/assets/brand.png" alt="" width="56" height="56">
-  <p class="eyebrow">掌柜智库</p><h1>{{ title }}</h1>
-  <p class="muted">{% if mode == 'register' %}创建账号，拥有自己的私有知识库。{% else %}登录后继续管理文档和知识问答。{% endif %}</p>
-  {# 注册开关控制表单展示；真正的注册权限仍由后端接口检查。 #}
-  {% if mode != 'register' or registration %}
-  <form id="auth-form">
-    <label for="username">用户名</label><input id="username" name="username" autocomplete="username" minlength="3" maxlength="32" pattern="[A-Za-z0-9_-]{3,32}" required aria-describedby="username-help">
-    <small id="username-help">3–32 位英文字母、数字、下划线或连字符，不区分大小写。</small>
-    <label for="password">密码</label><input id="password" name="password" type="password" autocomplete="{{ 'new-password' if mode == 'register' else 'current-password' }}" {% if mode == 'register' %}minlength="12"{% endif %} maxlength="128" required>
-    {% if mode == 'register' %}<small>12–128 个字符，建议使用多个词组成的长密码。</small>
-    <label for="password-confirm">确认密码</label><input id="password-confirm" name="password_confirm" type="password" autocomplete="new-password" minlength="12" maxlength="128" required>{% endif %}
-    {# auth.js 拦截提交并在此展示校验或接口错误，不将密码写入浏览器存储。 #}
-    <p id="auth-error" role="alert" hidden></p><button type="submit" id="auth-submit">{{ title }}</button>
-  </form>
-  {% else %}<p>当前未开放注册，请联系管理员。</p>{% endif %}
-  <p class="auth-link">{% if mode == 'register' %}已有账号？<a href="/login.html">去登录</a>{% elif registration %}还没有账号？<a href="/register.html">创建账号</a>{% endif %}</p>
-</main></body></html>
+    <img class="brand" src="/static/assets/brand.png" alt="" width="56" height="56">
+    <p class="eyebrow">掌柜智库</p>
+    <h1>{{ title }}</h1>
+    <p class="muted">{% if mode == 'register' %}创建账号，拥有自己的私有知识库。{% else %}登录后继续管理文档和知识问答。{%
+        endif %}</p>
+    {# 注册开关控制表单展示；真正的注册权限仍由后端接口检查。 #}
+    {% if mode != 'register' or registration %}
+    <form id="auth-form">
+        <label for="username">用户名</label><input id="username" name="username" autocomplete="username" minlength="3"
+                                                   maxlength="32" pattern="[A-Za-z0-9_-]{3,32}" required
+                                                   aria-describedby="username-help">
+        <small id="username-help">3–32 位英文字母、数字、下划线或连字符，不区分大小写。</small>
+        <label for="password">密码</label><input id="password" name="password" type="password"
+                                                 autocomplete="{{ 'new-password' if mode == 'register' else 'current-password' }}"
+                                                 {% if mode== 'register' %}minlength="12"{% endif %} maxlength="128"
+        required>
+        {% if mode == 'register' %}<small>12–128 个字符，建议使用多个词组成的长密码。</small>
+        <label for="password-confirm">确认密码</label><input id="password-confirm" name="password_confirm"
+                                                             type="password" autocomplete="new-password" minlength="12"
+                                                             maxlength="128" required>{% endif %}
+        {# auth.js 拦截提交并在此展示校验或接口错误，不将密码写入浏览器存储。 #}
+        <p id="auth-error" role="alert" hidden></p>
+        <button type="submit" id="auth-submit">{{ title }}</button>
+    </form>
+    {% else %}<p>当前未开放注册，请联系管理员。</p>{% endif %}
+    <p class="auth-link">{% if mode == 'register' %}已有账号？<a href="/login.html">去登录</a>{% elif registration
+        %}还没有账号？<a href="/register.html">创建账号</a>{% endif %}</p>
+</main>
+</body>
+</html>

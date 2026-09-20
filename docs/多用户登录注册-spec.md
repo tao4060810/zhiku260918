@@ -194,6 +194,7 @@ API 层用 `Depends` 获取身份并将异常转换为 HTTP 状态；后台任�
 - 第一阶段所有资产仅知识库拥有者可读。第二阶段 `kind=image` 才允许有效只读成员查看，`kind=original` 仍仅允许拥有者下载。返回 `Cache-Control: private, no-store`；原文件强制附件下载，图片限定受支持 MIME 类型并设置 `nosniff`。
 - Markdown 切片、回答和历史引用使用上述同源资产路径，不输出 MinIO 直链或长效签名 URL。同步调整后端图片提取白名单与前端 URL 校验：只接受规范化的本站 `/assets/{合法ID}` 路径，不允许协议相对地址或任意路径。
 - 模型选择图片必须引用传入的本库资产；引用校验不能只检查文本 URL 相同，还要确认资产所属文档和库。视觉模型所需图片由后台读取并使用现有受控模型调用传输，不为模型访问而开放公共桶。
+- 回答与配图由同一次模型调用生成：在相关段落插入 Markdown 图片，地址只能来自本轮进入回答上下文、已校验归属的本地资料。后端保留合法图片的位置并移除非法或重复图片，不要求图片所在片段已被正文引用，不限制为 3 张。前端仅加载最终白名单中的图片，流式过程中隐藏未校验的图片标记；旧版底部附件继续兼容，正文已有图片不重复追加。配图来源随会话保存，历史传给下一轮模型前清理旧图片地址。
 - 旧匿名图片迁入私有桶、重写切片与历史链接后，需关闭原对象的匿名访问并确认旧 URL 已失效。无法确认归属的图片和记录进入隔离清单，不能继续以旧公开链接兜底。历史迁移前保留备份及映射，不任意修改答案正文。
 
 ## 6. 接口契约
@@ -329,7 +330,7 @@ API 层用 `Depends` 获取身份并将异常转换为 HTTP 状态；后台任�
 | 修改 | `node_item_name_recognition.py`、`node_import_milvus.py`（导入节点目录） | 新集合字段、按库和文档删除/写入，避免跨库同名覆盖 |
 | 修改 | `processor/import_processor/nodes/node_md_img.py` | 图片对象路径隔离，生成受保护资产引用 |
 | 修改 | `utils/milvus_utils.py`、`utils/minio_utils.py` | 统一范围过滤；私有存储，移除自动匿名策略 |
-| 修改 | `utils/answer_presentation.py`、`processor/query_processor/prompt/answer_prompt.py` | 支持同源资产引用，校验图片属于当前库的已引用文档 |
+| 修改 | `utils/answer_presentation.py`、`processor/query_processor/prompt/answer_prompt.py` | 支持同源资产引用，校验图片属于当前库的本轮来源文档，保留实际配图来源 |
 | 修改 | `config/milvus_config.py`、`config/minio_config.py`、`config/import_config.py` | 新集合、私有桶、知识库目录及文档/容量配额配置 |
 | 修改 | `web/templates/base.html`、`chat.html`、`import.html` 及对应样式 | 第一阶段：文档入口、用户菜单和持久清单；第二阶段：选库及成员管理 |
 | 修改 | `web/static/js/common.js`、`chat.js`、`import.js`、`import-status.js` | 认证初始化、CSRF、退出清理、分账号恢复与导入状态 |

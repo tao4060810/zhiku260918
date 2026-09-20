@@ -69,7 +69,8 @@ class NodeSearchEmbedding(NodeBase):
                  collection_name=collection_name,  # 检索的目标集合名（文本片段向量集合）
                  reqs=reqs,  # 构造好的混合搜索请求对象（稠密+稀疏）
                  ranker_weights=(0.8, 0.2),  # 稠/稀疏向量评分权重配比，各占50%（可按业务调优）
-                 output_fields=["chunk_id", "content", "item_name", "title", "file_title", "kb_id", "document_id"]
+                 output_fields=["chunk_id", "content", "item_name", "title", "file_title", "kb_id", "document_id"],
+                 limit=10
              )
 
              # 7、构造并返回结果：若检索结果非空，取res[0]，否则返回空列表

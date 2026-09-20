@@ -191,8 +191,13 @@
     padding: 8px 12px;
 }
 .message-body img {
-    max-width: 100%;
-    max-height: 320px;
+    display: block;
+    width: min(100%, 720px);
+    height: auto;
+    max-height: 480px;
+    margin: 12px 0;
+    border: 1px solid var(--line);
+    border-radius: 5px;
     object-fit: contain;
     cursor: zoom-in;
 }
@@ -284,14 +289,18 @@
     margin-top: 5px;
 }
 .image-list {
-    display: flex;
-    flex-wrap: wrap;
-    gap: 8px;
+    display: grid;
+    grid-template-columns: minmax(0, 1fr);
+    gap: 16px;
     margin-top: 14px;
+    width: min(100%, 720px);
 }
+/* 示意图按回答区域展开，保持完整比例；手机端自动缩至容器宽度。 */
 .image-list img {
-    width: 112px;
-    height: 84px;
+    display: block;
+    width: 100%;
+    height: auto;
+    max-height: 480px;
     border: 1px solid var(--line);
     object-fit: contain;
     border-radius: 5px;
@@ -453,10 +462,6 @@
     }
     .message-body {
         font-size: 13px;
-    }
-    .image-list img {
-        width: 90px;
-        height: 70px;
     }
 }
 .message.streaming .message-body {

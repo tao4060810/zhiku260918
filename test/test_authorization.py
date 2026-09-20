@@ -109,6 +109,37 @@ class AuthorizationTests(DatabaseCase):
         output=''.join(asyncio.run(collect()))
         self.assertIn('AUTH_EXPIRED',output);self.assertNotIn('secret',output)
 
+    def test_inline_answer_images_preserve_scope_and_history_in_both_modes(self):
+        from processor.query_processor.nodes.node_answer_output import NodeAnswerOutput
+        own, foreign, doc = str(uuid4()), str(uuid4()), str(uuid4())
+        self.db.assets.insert_many([
+            {'_id':own, 'kb_id':self.ka['_id'], 'document_id':doc, 'kind':'image'},
+            {'_id':foreign, 'kb_id':self.kb['_id'], 'document_id':doc, 'kind':'image'},
+        ])
+        docs = [
+            {'source':'local', 'kb_id':self.ka['_id'], 'document_id':doc, 'content':'配置步骤'},
+            {'source':'local', 'kb_id':self.ka['_id'], 'document_id':doc,
+             'content':f'![连接图](/assets/{own}) ![越权图](/assets/{foreign})'},
+        ]
+        answer = f'Steps[cite:1]\n\n![连接图](/assets/{own})\n\nNext.\n![越权图](/assets/{foreign})'
+        expected = f'Steps[cite:1]\n\n![连接图](/assets/{own})\n\nNext.'
+        llm = SimpleNamespace(invoke=lambda prompt: SimpleNamespace(content=answer),
+                              stream=lambda prompt: iter([SimpleNamespace(content=answer)]))
+        for streaming in (False, True):
+            with self.subTest(streaming=streaming), \
+                 patch('processor.query_processor.nodes.node_answer_output.get_llm_client', return_value=llm) as client:
+                state = {'user_id':self.a['_id'], 'kb_id':self.ka['_id'], 'session_id':self.sa,
+                         'original_query':'展示连接图', 'reranked_docs':docs, 'is_stream':streaming}
+                result = NodeAnswerOutput().process(state)
+            self.assertNotIn(foreign, result['prompt'])
+            self.assertNotIn(foreign, result['answer'])
+            client.assert_called_once_with()
+            self.assertEqual(result['image_urls'], [f'/assets/{own}'])
+            self.assertEqual(len(result['sources']), 2)
+            history = self.client.get('/history/'+self.sa).json()['items'][-1]
+            self.assertEqual(history['image_urls'], result['image_urls'])
+            self.assertEqual(history['text'], expected)
+
     def test_blocking_query_does_not_return_after_logout(self):
         from utils.auth_utils import revoke_session
         raw=self.client.cookies.get('zhiku_auth')
